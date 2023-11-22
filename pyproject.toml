@@ -1,0 +1,17 @@
+[project]
+name = ""
+version = ""
+description = ""
+authors = [
+    {name = "reservoirinvest", email = "reservoirinvest@gmail.com"},
+]
+dependencies = [
+    "jupyter>=1.0.0",
+    "lab>=8.0",
+    "pandas>=2.1.1",
+    "lxml>=4.9.3",
+]
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+

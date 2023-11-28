@@ -26,7 +26,7 @@ def get_file_age(file_path: Path):
 
     except FileNotFoundError as e:
 
-        logger.info(f"File not found in {str(file_path)}")
+        logger.info(f"{str(file_path)} file is not found")
         
         file_age = None
 

@@ -1,9 +1,11 @@
-# Indexes to add to SnP 500 weeklies
-NANOS: Nanos S&P 500 Index
-SPX: S&P 500 Index
-SPXW: S&P 500 Index Weekly
-XSP: Mini S&P 500 Index
-RUT: Russel 2000 Index
-OEX: S&P 100 Index
-XEO: S&P 100 Index European
-VIX: Volatility Index 30 day of SPX
+# CBOE Indexes to add to SnP 500 weeklies
+CBOE:
+  NANOS: Nanos S&P 500 Index
+  SPX: S&P 500 Index
+  XSP: Mini S&P 500 Index
+  OEX: S&P 100 Index
+  XEO: S&P 100 Index European
+  VIX: Volatility Index 30 day of SPX
+
+RUSSELL:
+  RUT: Russell 2000 Index

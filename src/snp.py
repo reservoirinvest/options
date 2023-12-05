@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-import pickle
+
 
 import numpy as np
 import pandas as pd
@@ -9,7 +9,7 @@ from from_root import from_root
 from ib_insync import IB, Index, Stock
 from loguru import logger
 from tqdm.asyncio import tqdm
-from utils import get_file_age
+from utils import get_file_age, chunk_me, pickle_me
 
 ROOT = from_root() # Setting the root directory of the program
 
@@ -170,24 +170,57 @@ def assemble_underlying_contracts() -> dict:
     underlying_contracts = make_dict_of_underlyings(qualified_contracts)
 
     return underlying_contracts
+    
 
-def pickle_unds(und_contracts: dict, file_name_with_path: Path, minimum_age_in_days: int=1):
+def pickle_unds(und_contracts: dict, 
+                file_name_with_path: Path, 
+                minimum_age_in_days: int=1):
 
     existing_file_age = get_file_age(file_name_with_path)
 
     if existing_file_age is None: # No file exists
-        pickle_me = True
+        to_pickle = True
     elif existing_file_age.days > minimum_age_in_days:
-        pickle_me = True
+        to_pickle = True
     else:
-        pickle_me = False
+        to_pickle = False
 
-    if pickle_me:
-        with open(str(file_name_with_path), 'wb') as handle:
-            pickle.dump(und_contracts, handle, protocol=pickle.HIGHEST_PROTOCOL)
-            logger.info("Pickled underlying contracts")
+    if to_pickle:
+        pickle_me(und_contracts, file_name_with_path)
+        logger.info("Pickled underlying contracts")
     else:
         logger.info(f"Not pickled as existing file age {existing_file_age.days} is < {minimum_age_in_days}")
+
+
+# !-- Experiments
+
+async def create_a_qualify_task(ib, contract):
+
+    task = asyncio.create_task(ib.qualifyContractsAsync(contract), name=contract.symbol)
+
+    return task
+
+
+
+async def chunk_tasks(ib, contracts: list, timeout: int=44):
+    
+    tasks = [create_a_qualify_task(ib, contract) for contract in contracts]
+
+    task_chunks = chunk_me(tasks, 44)
+
+    return task_chunks
+ 
+
+async def gather_results(task_chunks: list):
+
+    all_tasks = []
+
+    for tasks in task_chunks:
+
+        all_tasks.append(await tqdm.gather(*tasks))
+
+    return all_tasks
+
 
 
 if __name__ == "__main__":

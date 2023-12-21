@@ -1,11 +1,16 @@
 import datetime
+import pickle
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from from_root import from_root
-from collections.abc import Iterable
 
+import yaml
+from from_root import from_root
+from ib_insync import IB
 from loguru import logger
-import pickle
+from tqdm.asyncio import tqdm
+
+ROOT = from_root()
 
 @dataclass
 class Timediff:
@@ -14,6 +19,21 @@ class Timediff:
     hours: int
     minutes: int
     seconds: float
+
+class Vars:
+    """Variables from var.yml"""
+    def __init__(self, MARKET: str) -> None:
+
+        self.MARKET = MARKET
+
+        with open(ROOT / 'config' / 'var.yml', "rb") as f:
+            data = yaml.safe_load(f)
+
+        for k, v in data["COMMON"].items():
+            setattr(self, k, v)
+
+        for k, v in data[MARKET].items():
+            setattr(self, k, v)
 
 
 def get_file_age(file_path: Path):
@@ -45,6 +65,29 @@ def get_file_age(file_path: Path):
     return file_age
 
 
+async def qualify_unds(contracts: list, port: int=1300):
+    """Qualify underlying contracts asynchronously"""
+
+    with await IB().connectAsync(port=port) as ib:
+
+        tasks = [ib.qualifyContractsAsync(c) for c in contracts]
+
+        results = [await task_ 
+                   for task_ 
+                   in tqdm.as_completed(tasks, total=len(tasks), desc='Qualifying Unds')]
+
+        return results
+
+
+def make_dict_of_underlyings(qualified_contracts: list) -> dict:
+    """Makes a dictionary of underlying contracts"""
+
+    contracts_dict = {c[0].symbol: c[0] for c in qualified_contracts if c}
+
+    return contracts_dict
+
+
+
 def chunk_me(data: list, size: int=44) -> list:
     """cuts the list into chunks"""
 
@@ -62,6 +105,41 @@ def pickle_me(obj, file_name_with_path: Path):
     
     with open(str(file_name_with_path), 'wb') as handle:
             pickle.dump(obj, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def pickle_with_age_check(obj: dict, 
+                file_name_with_path: Path, 
+                minimum_age_in_days: int=1):
+    """Pickles an object after checking file age"""
+
+    existing_file_age = get_file_age(file_name_with_path)
+
+    if existing_file_age is None: # No file exists
+        to_pickle = True
+    elif existing_file_age.days > minimum_age_in_days:
+        to_pickle = True
+    else:
+        to_pickle = False
+
+    if to_pickle:
+        pickle_me(obj, file_name_with_path)
+        logger.info(f"Pickled underlying contracts to {file_name_with_path}")
+    else:
+        logger.info(f"Not pickled as existing file age {existing_file_age.days} is < {minimum_age_in_days}")
+
+
+def get_pickle(path: Path):
+    """Gets pickled object"""
+
+    output = None # initialize
+
+    try:
+        with open(path, 'rb') as f:
+            output = pickle.load(f)
+    except FileNotFoundError:
+        logger.error(f"file not found: {path}")
+    
+    return output
 
 def make_name(obj) -> str:
     """
@@ -120,22 +198,8 @@ def make_name(obj) -> str:
 
 
 if __name__ == "__main__":
+    print(Vars('NSE'))
 
-    from loguru import logger
-    import pandas as pd
-    # import random
-    
-
-    ROOT = from_root()
-
-    with open(ROOT/'data'/'unds.pkl', 'rb') as f:
-        d = pickle.load(f)
-
-    cts = pd.Series(d.values()).sample(3).to_list()
-
-    name = make_name(cts)
-
-    logger.info(name)
 
 
 

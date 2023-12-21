@@ -1,17 +1,17 @@
 import asyncio
 from pathlib import Path
 
-
 import numpy as np
 import pandas as pd
 import yaml
 from from_root import from_root
-from ib_insync import IB, Index, Stock
-from loguru import logger
+from ib_insync import Index, Stock
 from tqdm.asyncio import tqdm
-from utils import get_file_age, chunk_me, pickle_me
+
+from utils import Vars, chunk_me, make_dict_of_underlyings, qualify_unds
 
 ROOT = from_root() # Setting the root directory of the program
+PORT = Vars('SNP').PORT
 
 
 def read_weeklys() -> pd.DataFrame:
@@ -80,8 +80,6 @@ def add_indexes(df: pd.DataFrame, path_to_yaml_file: str) -> pd.DataFrame:
         
     more_df = pd.concat(dfs, ignore_index=True)
 
-    # more_df = pd.DataFrame(list(kv_pairs.items()), columns=['symbol', 'desc'])
-
     df_all = pd.concat([df, more_df], ignore_index=True)
     
     return df_all
@@ -96,9 +94,7 @@ def split_stocks_and_index(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def make_snp_weeklies(indexes_path: Path):
-    """
-    Makes snp weeklies with indexes
-    """
+    """Makes snp weeklies with indexes"""
 
     # get snp stock weeklies
     df_weekly_cboes = make_weekly_cboes()
@@ -117,12 +113,12 @@ def make_snp_weeklies(indexes_path: Path):
     return df_weeklies
 
 
-def build_underlying_contracts(df: pd.DataFrame) -> pd.DataFrame:
+def make_unqualified_snp_underlyings(df: pd.DataFrame) -> pd.DataFrame:
     """Build underlying contracts"""
 
     contracts = [Stock(symbol=symbol, exchange=exchange, currency='USD') 
                 if 
-                    secType == 'STK' 
+                    secType == 'STK'
                 else 
                     Index(symbol=symbol, exchange=exchange, currency='USD') 
                 for 
@@ -131,105 +127,29 @@ def build_underlying_contracts(df: pd.DataFrame) -> pd.DataFrame:
     df = df.assign(contract = contracts)
 
     return df
-
-
-async def qualify_unds(contracts: list):
-    """Qualify underlying contracts asynchronously"""
-
-    with await IB().connectAsync(port=1300) as ib:
-
-        tasks = [ib.qualifyContractsAsync(c) for c in contracts]
-
-        results = [await task_ 
-                   for task_ 
-                   in tqdm.as_completed(tasks, total=len(tasks), desc='Qualifying Unds')]
-
-        return results
     
 
-def make_dict_of_underlyings(qualified_contracts: list) -> dict:
-    """Makes a dictionary of underlying contracts"""
-
-    contracts_dict = {c[0].symbol: c[0] for c in qualified_contracts if c}
-
-    return contracts_dict
-
-
-def assemble_underlying_contracts() -> dict:
-    """Assembles a dictionary of underlying contracts"""
+def assemble_snp_underlyings() -> dict:
+    """Assembles a dictionary of SNP underlying contracts"""
 
     indexes_path = ROOT / 'data' / 'master' / 'snp_indexes.yml'
     
     df = make_snp_weeklies(indexes_path) \
-         .pipe(build_underlying_contracts)
+         .pipe(make_unqualified_snp_underlyings)
     
     contracts = df.contract.to_list()
     
-    qualified_contracts = asyncio.run(qualify_unds(contracts))
+    qualified_contracts = asyncio.run(qualify_unds(contracts, port=PORT))
 
     underlying_contracts = make_dict_of_underlyings(qualified_contracts)
 
     return underlying_contracts
     
 
-def pickle_unds(und_contracts: dict, 
-                file_name_with_path: Path, 
-                minimum_age_in_days: int=1):
-
-    existing_file_age = get_file_age(file_name_with_path)
-
-    if existing_file_age is None: # No file exists
-        to_pickle = True
-    elif existing_file_age.days > minimum_age_in_days:
-        to_pickle = True
-    else:
-        to_pickle = False
-
-    if to_pickle:
-        pickle_me(und_contracts, file_name_with_path)
-        logger.info("Pickled underlying contracts")
-    else:
-        logger.info(f"Not pickled as existing file age {existing_file_age.days} is < {minimum_age_in_days}")
-
-
-# !-- Experiments
-
-async def create_a_qualify_task(ib, contract):
-
-    task = asyncio.create_task(ib.qualifyContractsAsync(contract), name=contract.symbol)
-
-    return task
-
-
-
-async def chunk_tasks(ib, contracts: list, timeout: int=44):
-    
-    tasks = [create_a_qualify_task(ib, contract) for contract in contracts]
-
-    task_chunks = chunk_me(tasks, 44)
-
-    return task_chunks
- 
-
-async def gather_results(task_chunks: list):
-
-    all_tasks = []
-
-    for tasks in task_chunks:
-
-        all_tasks.append(await tqdm.gather(*tasks))
-
-    return all_tasks
-
-
-
 if __name__ == "__main__":
 
-   und_contracts = assemble_underlying_contracts()
-
-   print(und_contracts)
-
-   pickle_unds(und_contracts, ROOT / 'data' / 'unds.pkl')
+    indexes_path = ROOT / 'data' / 'master' / 'snp_indexes.yml'
+    output = assemble_snp_underlyings()
 
 
     

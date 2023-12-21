@@ -1,0 +1,6 @@
+# Converstion of NSE symbols to IBKR (NSE: IBKR)
+
+"M&M": "MM"
+"M&MFIN": "MMFIN"
+"L&TFH": "LTFH"
+"NIFTY": "NIFTY50"

@@ -40,8 +40,9 @@ NSE:
   MARGIN_LIMIT: 0.7 # Initial margin should not be greater than 90% of NLV
   POSN_LIMIT: 0.18 # Each symbol's market value should not be greater than 18% of NLV
   BLACKLIST: # Ref: https://zerodha.com/margin-calculator/SPAN/
-  - RCOM
-  - IRCTC
+  - FINNIFTY
+  - MIDCPNIFTY
+  - NIFTYIT
   
   POSN_LIMIT: 0.10 # Each symbol's market value should not be greater than 18% of NLV
   

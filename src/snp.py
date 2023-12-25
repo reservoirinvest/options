@@ -8,10 +8,11 @@ from from_root import from_root
 from ib_insync import Index, Stock
 from tqdm.asyncio import tqdm
 
-from utils import Vars, chunk_me, make_dict_of_underlyings, qualify_unds
+from utils import Vars, chunk_me, make_dict_of_qualified_contracts, qualify_me
 
 ROOT = from_root() # Setting the root directory of the program
-PORT = Vars('SNP').PORT
+_vars = Vars('NSE')
+PORT = _vars.PORT
 
 
 def read_weeklys() -> pd.DataFrame:
@@ -139,9 +140,9 @@ def assemble_snp_underlyings() -> dict:
     
     contracts = df.contract.to_list()
     
-    qualified_contracts = asyncio.run(qualify_unds(contracts, port=PORT))
+    qualified_contracts = asyncio.run(qualify_me(contracts, port=PORT))
 
-    underlying_contracts = make_dict_of_underlyings(qualified_contracts)
+    underlying_contracts = make_dict_of_qualified_contracts(qualified_contracts)
 
     return underlying_contracts
     

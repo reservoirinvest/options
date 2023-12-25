@@ -58,7 +58,7 @@ def make_name(obj) -> str:
     return name
 
 
-def chunk_me(data: list, size: int=44) -> list:
+def chunk_me(data: list, size: int=25) -> list:
     """cuts the list into chunks"""
 
     if type(data) is not list:

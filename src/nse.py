@@ -3,13 +3,17 @@ from pathlib import Path
 
 import yaml
 from from_root import from_root
-from ib_insync import Index, Stock
+from ib_insync import IB, Index, Stock
+from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
-
-from utils import Vars, qualify_unds, make_dict_of_underlyings, pickle_with_age_check
+from utils import (Vars, make_chains, make_dict_of_qualified_contracts,
+                   make_naked_puts, pickle_with_age_check, qualify_me, get_pickle)
 
 ROOT = from_root() # Setting the root directory of the program
-PORT = Vars('NSE').PORT
+MARKET = 'NSE'
+
+_vars = Vars(MARKET)
+PORT = _vars.PORT
 
 def nse2ib(nselist: list, path_to_yaml_file: Path) -> list:
     """Convert NSE symbols to IB friendly ones"""
@@ -25,6 +29,7 @@ def nse2ib(nselist: list, path_to_yaml_file: Path) -> list:
 
     return ib_fnos
 
+
 def make_unqualified_nse_underlyings(symbols: list) -> list:
     """Makes raw underlying contracts for NSE"""
 
@@ -36,7 +41,7 @@ def make_unqualified_nse_underlyings(symbols: list) -> list:
     return contracts
 
 
-def assemble_nse_underlyings() -> dict:
+async def assemble_nse_underlyings(ib: IB) -> dict:
     """Assembles a dictionary of NSE underlying contracts"""
 
     # get FNO list
@@ -53,9 +58,9 @@ def assemble_nse_underlyings() -> dict:
     raw_nse_contracts = make_unqualified_nse_underlyings(ib_fnos)
 
     # qualify underlyings
-    qualified_unds = asyncio.run(qualify_unds(raw_nse_contracts, port=PORT))
+    qualified_unds = await qualify_me(ib, raw_nse_contracts)
 
-    unds_dict = make_dict_of_underlyings(qualified_unds)
+    unds_dict = make_dict_of_qualified_contracts(qualified_unds)
 
     return unds_dict
 
@@ -67,7 +72,7 @@ def make_nse_lots() -> dict:
     
     clean_lots = {k: v for k, v 
                   in lots.items() 
-                  if k not in Vars('NSE').BLACKLIST}
+                  if k not in _vars.BLACKLIST}
     
     # splits dict
     symbol_list, lot_list = zip(*clean_lots.items()) 
@@ -79,13 +84,37 @@ def make_nse_lots() -> dict:
     return output
 
 
-
 if __name__ == "__main__":
 
-    unds = assemble_nse_underlyings()
+    async def assemble_unds():
+        with await IB().connectAsync(port=_vars.PORT) as ib:
+            unds = await assemble_nse_underlyings(ib)
+            return unds
+    unds = asyncio.run(assemble_unds())
     unds_path = ROOT / 'data' / 'nse' / 'unds.pkl'
     pickle_with_age_check(unds, unds_path)
 
+    async def assemble_chains():
+        with await IB().connectAsync(port=_vars.PORT) as ib:
+            chains = await make_chains(ib, list(unds.values()))
+        return chains
+    df_chains = asyncio.run(assemble_chains())
+    chains_path = ROOT / 'data' / MARKET / 'df_chains.pkl'
+    pickle_with_age_check(df_chains, chains_path)
+
     lots = make_nse_lots()
-    lots_path = ROOT / 'data' / 'nse' / 'lots.pkl'
+    lots_path = ROOT / 'data' / MARKET / 'lots.pkl'
+    pickle_with_age_check(lots, lots_path)
+
+    async def assemble_naked_puts():
+        with await IB().connectAsync(port=_vars.PORT) as ib:
+            nakeds = await make_naked_puts(ib, df_chains, MARKET='nse', how_many=-2)
+        return nakeds
+    df_nakeds = asyncio.run(assemble_naked_puts())
+    nakeds_path = ROOT / 'data' / MARKET / 'df_nakeds.pkl'
+    pickle_with_age_check(df_nakeds, nakeds_path)
+
+
+    
+
     

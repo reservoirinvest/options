@@ -1,19 +1,42 @@
 import asyncio
+import logging
 from pathlib import Path
 
+import pandas as pd
 import yaml
 from from_root import from_root
-from ib_insync import IB, Index, Stock
+from ib_insync import IB, Index, Stock, util
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
-from utils import (Vars, make_chains, make_dict_of_qualified_contracts,
-                   make_naked_puts, pickle_with_age_check, qualify_me, get_pickle)
+from utils import (Timer, Vars, delete_files, get_margins, get_opt_price_ivs,
+                   get_pickle, get_prec, make_chains,
+                   make_dict_of_qualified_contracts, make_qualified_opts,
+                   pickle_with_age_check, qualify_me)
 
 ROOT = from_root() # Setting the root directory of the program
 MARKET = 'NSE'
 
+# Set variables
 _vars = Vars(MARKET)
 PORT = _vars.PORT
+CALLSTDMULT = _vars.CALLSTDMULT
+PUTSTDMULT = _vars.PUTSTDMULT
+MINEXPROM = _vars.MINEXPROM
+
+# Set paths for nse pickles
+unds_path = ROOT / 'data' / MARKET / 'unds.pkl'
+chains_path = ROOT / 'data' / MARKET / 'df_chains.pkl'
+lots_path = ROOT / 'data' / MARKET / 'lots.pkl'
+
+qualified_puts_path = ROOT / 'data' / MARKET / 'df_qualified_puts.pkl'
+qualified_calls_path = ROOT / 'data' / MARKET / 'df_qualified_calls.pkl'
+
+opt_prices_path = ROOT / 'data' / MARKET / 'df_opt_prices.pkl'
+opt_margins_path = ROOT / 'data' / MARKET / 'df_opt_margins.pkl'
+
+all_opts_path = ROOT / 'data' / MARKET / 'df_all_opts.pkl'
+
+temp_path = ROOT / 'data' / MARKET / 'ztemp.pkl'
 
 def nse2ib(nselist: list, path_to_yaml_file: Path) -> list:
     """Convert NSE symbols to IB friendly ones"""
@@ -41,28 +64,30 @@ def make_unqualified_nse_underlyings(symbols: list) -> list:
     return contracts
 
 
-async def assemble_nse_underlyings(ib: IB) -> dict:
+async def assemble_nse_underlyings(port: int=_vars.PORT) -> dict:
     """Assembles a dictionary of NSE underlying contracts"""
 
-    # get FNO list
-    fnos = fnolist()
+    with await IB().connectAsync(port=port) as ib:
 
-    # remove blacklisted symbols - like NIFTYIT that doesn't have options
-    nselist = [n for n in fnos if n not in Vars('NSE').BLACKLIST]
+        # get FNO list
+        fnos = fnolist()
 
-    # clean to get IB FNOs
-    nse2ib_yml_path = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
-    ib_fnos = nse2ib(nselist, nse2ib_yml_path)
+        # remove blacklisted symbols - like NIFTYIT that doesn't have options
+        nselist = [n for n in fnos if n not in Vars('NSE').BLACKLIST]
 
-    # make raw underlying fnos
-    raw_nse_contracts = make_unqualified_nse_underlyings(ib_fnos)
+        # clean to get IB FNOs
+        nse2ib_yml_path = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
+        ib_fnos = nse2ib(nselist, nse2ib_yml_path)
 
-    # qualify underlyings
-    qualified_unds = await qualify_me(ib, raw_nse_contracts)
+        # make raw underlying fnos
+        raw_nse_contracts = make_unqualified_nse_underlyings(ib_fnos)
 
-    unds_dict = make_dict_of_qualified_contracts(qualified_unds)
+        # qualify underlyings
+        qualified_unds = await qualify_me(ib, raw_nse_contracts, desc='Qualifying Unds')
 
-    return unds_dict
+        unds_dict = make_dict_of_qualified_contracts(qualified_unds)
+
+        return unds_dict
 
 
 def make_nse_lots() -> dict:
@@ -84,36 +109,107 @@ def make_nse_lots() -> dict:
     return output
 
 
-if __name__ == "__main__":
+# Combine all target option margins and prices
+def create_target_opts(df_opt_margins: pd.DataFrame,
+                        df_opt_prices: pd.DataFrame,
+                        MINEXPROM: float):
+    
+    """Final naked target options with expected price"""
 
-    async def assemble_unds():
-        with await IB().connectAsync(port=_vars.PORT) as ib:
-            unds = await assemble_nse_underlyings(ib)
-            return unds
-    unds = asyncio.run(assemble_unds())
-    unds_path = ROOT / 'data' / 'nse' / 'unds.pkl'
-    pickle_with_age_check(unds, unds_path)
+    cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
+    df_all_opts = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
 
-    async def assemble_chains():
-        with await IB().connectAsync(port=_vars.PORT) as ib:
-            chains = await make_chains(ib, list(unds.values()))
-        return chains
-    df_chains = asyncio.run(assemble_chains())
-    chains_path = ROOT / 'data' / MARKET / 'df_chains.pkl'
-    pickle_with_age_check(df_chains, chains_path)
+    # Get precise expected prices
+    df_all_opts = df_all_opts.assign(expPrice = df_all_opts.apply(lambda x: 
+                                    get_prec(((MINEXPROM*x.dte/365*x.margin)+x.comm)
+                                            /x.lot_size, 0.05), 
+                                                axis=1))
 
-    lots = make_nse_lots()
-    lots_path = ROOT / 'data' / MARKET / 'lots.pkl'
-    pickle_with_age_check(lots, lots_path)
+    return df_all_opts
+    
 
-    async def assemble_naked_puts():
-        with await IB().connectAsync(port=_vars.PORT) as ib:
-            nakeds = await make_naked_puts(ib, df_chains, MARKET='nse', how_many=-2)
-        return nakeds
-    df_nakeds = asyncio.run(assemble_naked_puts())
-    nakeds_path = ROOT / 'data' / MARKET / 'df_nakeds.pkl'
-    pickle_with_age_check(df_nakeds, nakeds_path)
+def build_base():
+    """Freshly build the base and pickle"""
+    
+    # Assemble underlyings
+    unds = asyncio.run(assemble_nse_underlyings(PORT))        
+    pickle_with_age_check(unds, unds_path, 0)
 
+    # Make chains for underlyings
+    df_chains = asyncio.run(make_chains(port=PORT, MARKET=MARKET,
+                                        contracts=list(unds.values())))
+    pickle_with_age_check(df_chains, chains_path, 0)
+
+    # Qualified put and options generated from the chains
+    df_qualified_puts = asyncio.run(make_qualified_opts(PORT, 
+                            df_chains, 
+                            MARKET=MARKET,
+                            STDMULT=PUTSTDMULT,
+                            how_many=-2))     
+    pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
+
+    df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
+                            df_chains, 
+                            MARKET=MARKET,
+                            STDMULT=CALLSTDMULT,
+                            how_many=2))     
+    pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
+
+    df_all_qualified_options = pd.concat([df_qualified_calls, 
+                                          df_qualified_puts], 
+                                          ignore_index=True)
+
+    # Get the option prices
+    df_opt_prices = asyncio.run(get_opt_price_ivs(PORT, df_all_qualified_options))
+    pickle_with_age_check(df_opt_prices, opt_prices_path, 0)
+
+    # Get the lots for nse
+    lots = make_nse_lots()        
+    pickle_with_age_check(lots, lots_path, 0)
+
+    # Get the option margins
+    df_opt_margins = asyncio.run(get_margins(PORT, df_all_qualified_options, lots_path))
+    pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
+
+    # Get alll the options
+    df_all_opts = create_target_opts(df_opt_prices, 
+                                     df_opt_margins, 
+                                     _vars.MINEXPROM)
+    
+    pickle_with_age_check(df_all_opts, all_opts_path, 0)
+
+    return None
+
+if __name__ == "__main__":    
+
+    program_timer = Timer("Base")
+    program_timer.start()
+
+    # Delete log files
+    folder_path = ROOT / 'log'
+    file_pattern = MARKET.lower()+'*.log'
+    file_list = [folder_path.joinpath(folder_path, file_name) for file_name in file_pattern]
+    delete_files(file_list)
+
+    # Set the logger with logpath
+    IBI_LOGPATH = ROOT / 'log' / 'nse_ib.log'
+    LOGURU_PATH = ROOT / 'log' / 'nse_app.log'
+
+    util.logToFile(IBI_LOGPATH, level=logging.ERROR)
+    logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
+
+    GET_FROM_PICKLES = False
+
+    if GET_FROM_PICKLES:
+        unds = get_pickle(unds_path)
+        df_chains = get_pickle(chains_path)
+        lots = get_pickle(lots_path)
+        df_qualified_puts = get_pickle(qualified_puts_path)
+
+    else:
+        build_base()
+
+    logger.info(program_timer.stop())
 
     
 

@@ -1,15 +1,16 @@
 import asyncio
+import glob
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import yaml
 from from_root import from_root
-from ib_insync import IB, Index, Stock
+from ib_insync import IB, Index, Stock, util
 from loguru import logger
-
-from utils import (Timer, Vars, delete_files, get_margins, get_opt_price_ivs,
-                   get_pickle, get_prec, make_chains,
+from utils import (Timer, Vars, delete_all_pickles, delete_files, get_margins,
+                   get_opt_price_ivs, get_pickle, get_prec, make_chains,
                    make_dict_of_qualified_contracts, make_qualified_opts,
                    pickle_with_age_check, qualify_me)
 
@@ -19,6 +20,7 @@ MARKET = 'SNP'
 # Set variables
 _vars = Vars(MARKET)
 PORT = _vars.PORT
+CID = _vars.CID
 CALLSTDMULT = _vars.CALLSTDMULT
 PUTSTDMULT = _vars.PUTSTDMULT
 MINEXPROM = _vars.MINEXPROM
@@ -34,7 +36,7 @@ qualified_calls_path = ROOT / 'data' / MARKET / 'df_qualified_calls.pkl'
 opt_prices_path = ROOT / 'data' / MARKET / 'df_opt_prices.pkl'
 opt_margins_path = ROOT / 'data' / MARKET / 'df_opt_margins.pkl'
 
-all_opts_path = ROOT / 'data' / MARKET / 'df_all_opts.pkl'
+naked_targets_path = ROOT / 'data' / MARKET / 'df_naked_targets.pkl'
 
 temp_path = ROOT / 'data' / MARKET / 'ztemp.pkl'
 
@@ -153,7 +155,7 @@ def make_unqualified_snp_underlyings(df: pd.DataFrame) -> pd.DataFrame:
     return df
     
 
-async def assemble_snp_underlyings(port: int=_vars.PORT) -> dict:
+async def assemble_snp_underlyings(port: int=PORT) -> dict:
     """Assembles a dictionary of SNP underlying contracts"""
 
     indexes_path = ROOT / 'data' / 'master' / 'snp_indexes.yml'
@@ -163,7 +165,7 @@ async def assemble_snp_underlyings(port: int=_vars.PORT) -> dict:
     
     contracts = df.contract.to_list()
 
-    with await IB().connectAsync(port=port) as ib:
+    with await IB().connectAsync(port=port, clientId=CID) as ib:
     
         qualified_contracts = await qualify_me(ib, contracts, desc="Qualifying Unds")
 
@@ -179,15 +181,15 @@ def create_target_opts(df_opt_margins: pd.DataFrame,
     """Final naked target options with expected price"""
 
     cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
-    df_all_opts = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
+    df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
 
     # Get precise expected prices
-    df_all_opts = df_all_opts.assign(expPrice = df_all_opts.apply(lambda x: 
+    df_naked_targets = df_naked_targets.assign(expPrice = df_naked_targets.apply(lambda x: 
                                     get_prec(((MINEXPROM*x.dte/365*x.margin)+x.comm)
                                             /x.lot_size, 0.05), 
                                                 axis=1))
 
-    return df_all_opts
+    return df_naked_targets
     
 
 
@@ -232,11 +234,11 @@ def build_base():
     pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
 
     # Get alll the options
-    df_all_opts = create_target_opts(df_opt_prices, 
+    df_naked_targets = create_target_opts(df_opt_prices, 
                                      df_opt_margins, 
                                      _vars.MINEXPROM)
     
-    pickle_with_age_check(df_all_opts, all_opts_path, 0)
+    pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
 
     return None
 
@@ -246,10 +248,17 @@ if __name__ == "__main__":
     program_timer.start()
 
     # Delete log files
-    folder_path = ROOT / 'log'
+    log_folder_path = ROOT / 'log'
     file_pattern = MARKET.lower()+'*.log'
-    file_list = [folder_path.joinpath(folder_path, file_name) for file_name in file_pattern]
+    file_list = glob.glob(str(file_pattern))
     delete_files(file_list)
+
+    # Set the logger with logpath
+    IBI_LOGPATH = ROOT / 'log' / f'{MARKET.lower()}_ib.log'
+    LOGURU_PATH = ROOT / 'log' / f'{MARKET.lower()}__app.log'
+
+    util.logToFile(IBI_LOGPATH, level=logging.ERROR)
+    logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
 
     GET_FROM_PICKLES = False
 
@@ -260,6 +269,7 @@ if __name__ == "__main__":
         df_qualified_puts = get_pickle(qualified_puts_path)
 
     else:
+        delete_all_pickles(MARKET)
         build_base()
 
     logger.info(program_timer.stop())

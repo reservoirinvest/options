@@ -3,8 +3,8 @@ COMMON:
   HOST: 127.0.0.1
 
   # Client IDs
-  CID: 0
   MASTER: 10 # Master client for retrieving ALL (manual and API) orders and trades
+  COMMONCID: 0
 
   ACTIVE_STATUS:
   - ApiPending
@@ -20,6 +20,7 @@ NSE:
   CURRENCY: 'INR'
   PORT: 3000
   PAPER: 3001 # For paper trades in IBG
+  CID: 1
   MINDTE: 1
   MAXDTE: 60
 
@@ -41,6 +42,7 @@ SNP:
   EXCHANGE: 'SMART'
   CURRENCY: 'USD'
   PORT: 1300
+  CID: 2
   PAPER: 1301 # For paper trades in IBG
   MINDTE: 1
   MAXDTE: 35

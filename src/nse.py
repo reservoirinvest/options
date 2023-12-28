@@ -8,8 +8,8 @@ from from_root import from_root
 from ib_insync import IB, Index, Stock, util
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
-from utils import (Timer, Vars, delete_files, get_margins, get_opt_price_ivs,
-                   get_pickle, get_prec, make_chains,
+from utils import (Timer, Vars, delete_all_pickles, delete_files, get_margins,
+                   get_opt_price_ivs, get_pickle, get_prec, make_chains,
                    make_dict_of_qualified_contracts, make_qualified_opts,
                    pickle_with_age_check, qualify_me)
 
@@ -19,6 +19,7 @@ MARKET = 'NSE'
 # Set variables
 _vars = Vars(MARKET)
 PORT = _vars.PORT
+CID = _vars.CID
 CALLSTDMULT = _vars.CALLSTDMULT
 PUTSTDMULT = _vars.PUTSTDMULT
 MINEXPROM = _vars.MINEXPROM
@@ -34,7 +35,7 @@ qualified_calls_path = ROOT / 'data' / MARKET / 'df_qualified_calls.pkl'
 opt_prices_path = ROOT / 'data' / MARKET / 'df_opt_prices.pkl'
 opt_margins_path = ROOT / 'data' / MARKET / 'df_opt_margins.pkl'
 
-all_opts_path = ROOT / 'data' / MARKET / 'df_all_opts.pkl'
+naked_targets_path = ROOT / 'data' / MARKET / 'df_naked_targets.pkl'
 
 temp_path = ROOT / 'data' / MARKET / 'ztemp.pkl'
 
@@ -117,15 +118,15 @@ def create_target_opts(df_opt_margins: pd.DataFrame,
     """Final naked target options with expected price"""
 
     cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
-    df_all_opts = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
+    df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
 
     # Get precise expected prices
-    df_all_opts = df_all_opts.assign(expPrice = df_all_opts.apply(lambda x: 
+    df_naked_targets = df_naked_targets.assign(expPrice = df_naked_targets.apply(lambda x: 
                                     get_prec(((MINEXPROM*x.dte/365*x.margin)+x.comm)
                                             /x.lot_size, 0.05), 
                                                 axis=1))
 
-    return df_all_opts
+    return df_naked_targets
     
 
 def build_base():
@@ -145,14 +146,16 @@ def build_base():
                             df_chains, 
                             MARKET=MARKET,
                             STDMULT=PUTSTDMULT,
-                            how_many=-2))     
+                            how_many=-2,
+                            desc="Qualifying Puts"))     
     pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
 
     df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
                             df_chains, 
                             MARKET=MARKET,
                             STDMULT=CALLSTDMULT,
-                            how_many=2))     
+                            how_many=2,
+                            desc="Qualifying Calls"))     
     pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
 
     df_all_qualified_options = pd.concat([df_qualified_calls, 
@@ -172,11 +175,11 @@ def build_base():
     pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
 
     # Get alll the options
-    df_all_opts = create_target_opts(df_opt_prices, 
+    df_naked_targets = create_target_opts(df_opt_prices, 
                                      df_opt_margins, 
                                      _vars.MINEXPROM)
     
-    pickle_with_age_check(df_all_opts, all_opts_path, 0)
+    pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
 
     return None
 
@@ -186,14 +189,15 @@ if __name__ == "__main__":
     program_timer.start()
 
     # Delete log files
-    folder_path = ROOT / 'log'
+    log_folder_path = ROOT / 'log'
     file_pattern = MARKET.lower()+'*.log'
-    file_list = [folder_path.joinpath(folder_path, file_name) for file_name in file_pattern]
+    file_list = [log_folder_path.joinpath(log_folder_path, file_name) for file_name in file_pattern]
     delete_files(file_list)
 
     # Set the logger with logpath
-    IBI_LOGPATH = ROOT / 'log' / 'nse_ib.log'
-    LOGURU_PATH = ROOT / 'log' / 'nse_app.log'
+    IBI_LOGPATH = ROOT / 'log' / f'{MARKET.lower()}_ib.log'
+    LOGURU_PATH = ROOT / 'log' / f'{MARKET.lower()}_app.log'
+
 
     util.logToFile(IBI_LOGPATH, level=logging.ERROR)
     logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
@@ -207,6 +211,7 @@ if __name__ == "__main__":
         df_qualified_puts = get_pickle(qualified_puts_path)
 
     else:
+        delete_all_pickles(MARKET)
         build_base()
 
     logger.info(program_timer.stop())

@@ -1,7 +1,6 @@
 import asyncio
 import datetime
 import glob
-import logging
 import math
 import os
 import pickle
@@ -21,15 +20,6 @@ from tqdm.asyncio import tqdm
 
 ROOT = from_root()
 BAR_FORMAT = "{desc:<10}{percentage:3.0f}%|{bar}{r_bar}"
-
-# Set the logger with logpath
-IBI_LOGPATH = ROOT / 'log' / 'ib.log'
-LOGURU_PATH = ROOT / 'log' / 'app.log'
-
-
-logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
-# logger.add(IBI_LOGPATH, rotation='10 MB', compression='zip', mode='w')
-util.logToFile(IBI_LOGPATH, level=logging.ERROR)
 
 @dataclass
 class Timediff:
@@ -87,17 +77,34 @@ class Vars:
             setattr(self, k.upper(), v)
 
 
-def delete_files(file_list):
+def delete_files(file_list: list):
+    """Delete files with paths as a string"""
+
     for file_path in file_list:
+
+        if isinstance(file_path, Path):
+            file_path = str(file_path)
+
         try:
             if os.path.isfile(file_path):
                 os.remove(file_path)
+
         except Exception as e:
             print(f"Failed to delete {file_path}. Error: {str(e)}")
             with open(file_path, "w") as file:
                 file.write(None)
 
-    print("All files deleted successfully.")
+    # print("All files deleted successfully.")
+
+def delete_all_pickles(MARKET: str):
+    """Deletes all pickle files for the MARKET"""
+
+    pickle_folder_path = ROOT / 'data' / MARKET.lower()
+    file_pattern = glob.glob(str(pickle_folder_path / '*.pkl'))
+
+    delete_files(file_pattern)
+
+    return None
 
 # Usage example
 folder_path = "/path/to/folder"
@@ -241,12 +248,6 @@ async def qualify_me(ib: IB,
                      desc: str = 'Qualifying contracts'):
     """Qualify contracts asynchronously"""
 
-    # tasks = [ib.qualifyContractsAsync(c) for c in contracts]
-
-    # results = [await task_ 
-    #             for task_ 
-    #             in tqdm.as_completed(tasks, total=len(tasks), desc='Qualifying Contracts')]
-
     tasks = [asyncio.create_task(ib.qualifyContractsAsync(c), name=c.localSymbol) for c in contracts]
 
     await tqdm.gather(*tasks, desc=desc)
@@ -363,7 +364,10 @@ def chain_to_df(chain, contract:Contract, MARKET: str) -> pd.DataFrame:
     
     df3 = pd.merge(df, df2, on='key').drop('key', axis=1)
 
-    return df3
+    # remove dtes <=0 from chains
+    df4 = df3[df3.dte > 0]
+
+    return df4
 
 
 async def get_market_data(ib: IB, 
@@ -478,19 +482,20 @@ async def make_chains(port: int,
                       contracts: list,
                       MARKET: str,
                       chunk_size: int=25, 
-                      sleep: float=7
+                      sleep: float=7,
+                      CID: int=0,
                       ) -> pd.DataFrame:
     """Makes chains for a list of contracts. 2m 11s for 186 contracts.\n
     ...for optimal off-market, chunk-size of 25 and sleep of 7 seconds."""
 
-    with await IB().connectAsync(port=port) as ib:
+    with await IB().connectAsync(port=port, clientId=CID) as ib:
 
         chunks = tqdm(chunk_me(contracts, chunk_size), desc="Getting chains")
         dfs = []
 
         for cts in chunks:
 
-            tasks = [asyncio.create_task(combine_a_chain_with_stdev(ib, c, sleep, MARKET)) for c in cts]
+            tasks = [asyncio.create_task(combine_a_chain_with_stdev(ib=ib, contract=c, MARKET=MARKET, sleep=sleep)) for c in cts]
 
             results = await asyncio.gather(*tasks)
 
@@ -503,17 +508,19 @@ async def make_chains(port: int,
     return df_chains
 
 
-def make_target_option_contracts(df_target):
+def make_target_option_contracts(df_target: list, MARKET: str):
 
     """make option contracts from target df"""
+
+    EXCHANGE = 'NSE' if MARKET.upper() == 'NSE' else 'SMART'
 
     option_contracts = [Contract(
             symbol=symbol,
             strike=strike,
             lastTradeDateOrContractMonth=expiry,
             right=right,
-            exchange='NSE',
-            currency='INR',
+            exchange=EXCHANGE,
+            currency= 'USD' if MARKET.upper() == 'SNP' else 'INR',
             secType='OPT')
         for symbol, strike, expiry, right \
             in zip(df_target.symbol,
@@ -529,11 +536,11 @@ async def make_qualified_opts(port:int,
                     MARKET: str,
                     STDMULT: int,
                     how_many: int=-2,
+                    CID: int=0,
+                    desc: str='Qualifying Options'
                     ) -> pd.DataFrame:
     
     """Make naked puts from chains, based on PUTSTDMULT"""
-
-    _vars = Vars(MARKET.upper())
     
     target_puts = df_chains.groupby('symbol').sdev.\
         apply(lambda x: get_closest_values(x, STDMULT, how_many))
@@ -548,11 +555,11 @@ async def make_qualified_opts(port:int,
 
     df_target = df_ch2[['strike', 'expiry', 'right',]].reset_index()
 
-    options_list = make_target_option_contracts(df_target)
+    options_list = make_target_option_contracts(df_target, MARKET=MARKET)
 
     # qualify target options
-    with await IB().connectAsync(port=port) as ib:
-        options = await qualify_me(ib, options_list, desc='Qualifying Options')
+    with await IB().connectAsync(port=port, clientId=CID) as ib:
+        options = await qualify_me(ib, options_list, desc=desc)
 
     # generate target puts
     df_puts = util.df(options).iloc[:, 2:6].\
@@ -602,12 +609,14 @@ async def get_opt_prices(ib:IB,
     return flat_results
 
 
-async def get_opt_price_ivs(port: int, df_qualified_opts: pd.DataFrame) -> pd.DataFrame:
+async def get_opt_price_ivs(port: int, 
+                            df_qualified_opts: pd.DataFrame,
+                            CID: int=0) -> pd.DataFrame:
     """gets option prices and IVs"""
 
     opt_contracts = df_qualified_opts.qualified_opts.to_list()
 
-    with await IB().connectAsync(port=port) as ib:
+    with await IB().connectAsync(port=port, clientId=CID) as ib:
 
         opt_prices = await get_opt_prices(ib, opt_contracts)
 
@@ -700,7 +709,9 @@ async def get_a_margin(ib: IB,
 
 async def get_margins(port: int, 
                       df_nakeds: pd.DataFrame, 
-                      lot_path: Path=None, chunk_size: int=100):
+                      lot_path: Path=None, 
+                      chunk_size: int=100,
+                      CID: int=0):
 
     opt_contracts = df_nakeds.qualified_opts.to_list()
 
@@ -718,7 +729,7 @@ async def get_margins(port: int,
 
     chunks = chunk_me(opt_contracts, chunk_size)
 
-    with await IB().connectAsync(port=port) as ib:
+    with await IB().connectAsync(port=port, clientId=CID) as ib:
         
         for cts in chunks:
 

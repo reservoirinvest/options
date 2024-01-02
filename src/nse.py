@@ -1,4 +1,5 @@
 import asyncio
+import glob
 import logging
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from from_root import from_root
 from ib_insync import IB, Index, Stock, util
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
+
 from utils import (Timer, Vars, delete_all_pickles, delete_files, get_margins,
                    get_opt_price_ivs, get_pickle, get_prec, make_chains,
                    make_dict_of_qualified_contracts, make_qualified_opts,
@@ -121,24 +123,31 @@ def create_target_opts(df_opt_margins: pd.DataFrame,
     df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
 
     # Get precise expected prices
-    df_naked_targets = df_naked_targets.assign(expPrice = df_naked_targets.apply(lambda x: 
-                                    get_prec(((MINEXPROM*x.dte/365*x.margin)+x.comm)
-                                            /x.lot_size, 0.05), 
-                                                axis=1))
+    xp = (MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) + \
+        df_naked_targets.comm/df_naked_targets.lot_size
+    
+    expPrice = pd.concat([xp.clip(_vars.MINOPTSELLPRICE), 
+                          df_naked_targets.optPrice], axis=1)\
+                            .max(axis=1)
+    
+    expPrice = expPrice.apply(lambda x: get_prec(x, 0.5))
+
+    df_naked_targets = df_naked_targets.assign(expPrice=expPrice)
 
     return df_naked_targets
     
 
-def build_base():
+def build_base(puts_only: bool = True):
     """Freshly build the base and pickle"""
     
     # Assemble underlyings
     unds = asyncio.run(assemble_nse_underlyings(PORT))        
     pickle_with_age_check(unds, unds_path, 0)
 
-    # Make chains for underlyings
+    # Make chains for underlyings and limit the dtes
     df_chains = asyncio.run(make_chains(port=PORT, MARKET=MARKET,
                                         contracts=list(unds.values())))
+    df_chains = df_chains[df_chains.dte <= _vars.MAXDTE].reset_index(drop=True)
     pickle_with_age_check(df_chains, chains_path, 0)
 
     # Qualified put and options generated from the chains
@@ -158,7 +167,10 @@ def build_base():
                             desc="Qualifying Calls"))     
     pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
 
-    df_all_qualified_options = pd.concat([df_qualified_calls, 
+    if puts_only:
+        df_all_qualified_options = df_qualified_puts
+    else:
+        df_all_qualified_options = pd.concat([df_qualified_calls, 
                                           df_qualified_puts], 
                                           ignore_index=True)
 
@@ -185,14 +197,15 @@ def build_base():
 
 if __name__ == "__main__":    
 
-    program_timer = Timer("Base")
+    program_timer = Timer(f"{MARKET} base building")
     program_timer.start()
 
     # Delete log files
-    log_folder_path = ROOT / 'log'
-    file_pattern = MARKET.lower()+'*.log'
-    file_list = [log_folder_path.joinpath(log_folder_path, file_name) for file_name in file_pattern]
-    delete_files(file_list)
+    
+    log_folder_path = ROOT / 'log' / str(MARKET.lower()+"*.log")
+    file_pattern = glob.glob(str(log_folder_path))
+
+    delete_files(file_pattern)
 
     # Set the logger with logpath
     IBI_LOGPATH = ROOT / 'log' / f'{MARKET.lower()}_ib.log'
@@ -212,7 +225,7 @@ if __name__ == "__main__":
 
     else:
         delete_all_pickles(MARKET)
-        build_base()
+        build_base(puts_only = False)
 
     logger.info(program_timer.stop())
 

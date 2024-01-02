@@ -184,26 +184,38 @@ def create_target_opts(df_opt_margins: pd.DataFrame,
     df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
 
     # Get precise expected prices
-    df_naked_targets = df_naked_targets.assign(expPrice = df_naked_targets.apply(lambda x: 
-                                    get_prec(((MINEXPROM*x.dte/365*x.margin)+x.comm)
-                                            /x.lot_size, 0.05), 
-                                                axis=1))
+    xp = (MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) + \
+        df_naked_targets.comm/df_naked_targets.lot_size
+    
+    expPrice = pd.concat([xp.clip(_vars.MINOPTSELLPRICE), 
+                          df_naked_targets.optPrice], axis=1)\
+                            .max(axis=1)
+    
+    expPrice = expPrice.apply(lambda x: get_prec(x, 0.1))
+
+    df_naked_targets = df_naked_targets.assign(expPrice=expPrice)
+    
+    # df_naked_targets = df_naked_targets.assign(expPrice = df_naked_targets.apply(lambda x: 
+    #                                 get_prec(((MINEXPROM*x.dte/365*x.margin)+x.comm)
+    #                                         /x.lot_size, 0.05), 
+    #                                             axis=1))
 
     return df_naked_targets
     
 
 
-def build_base():
+def build_base(puts_only: bool = True):
     """Freshly build the base and pickle"""
     
     # Assemble underlyings
     unds = asyncio.run(assemble_snp_underlyings(PORT))        
     pickle_with_age_check(unds, unds_path, 0)
 
-    # Make chains for underlyings
+    # Make chains for underlyings and limit the dtes
     df_chains = asyncio.run(make_chains(port=PORT,
                                         MARKET=MARKET, 
                                         contracts=list(unds.values())))
+    df_chains = df_chains[df_chains.dte <= _vars.MAXDTE].reset_index(drop=True)
     pickle_with_age_check(df_chains, chains_path, 0)
 
     # Qualified put and options generated from the chains
@@ -211,17 +223,20 @@ def build_base():
                             df_chains, 
                             MARKET=MARKET,
                             STDMULT=PUTSTDMULT,
-                            how_many=-2))     
+                            how_many=-2, desc='Qualifying Puts'))     
     pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
 
     df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
-                            df_chains, 
-                            MARKET=MARKET,
-                            STDMULT=CALLSTDMULT,
-                            how_many=2))     
+                        df_chains, 
+                        MARKET=MARKET,
+                        STDMULT=CALLSTDMULT,
+                        how_many=2, desc="Qualifying Calls"))     
     pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
 
-    df_all_qualified_options = pd.concat([df_qualified_calls, 
+    if puts_only:
+        df_all_qualified_options = df_qualified_puts
+    else:
+        df_all_qualified_options = pd.concat([df_qualified_calls, 
                                           df_qualified_puts], 
                                           ignore_index=True)
 
@@ -244,18 +259,18 @@ def build_base():
 
 if __name__ == "__main__":    
 
-    program_timer = Timer("Base")
+    program_timer = Timer(f"{MARKET} base building")
     program_timer.start()
 
     # Delete log files
-    log_folder_path = ROOT / 'log'
-    file_pattern = MARKET.lower()+'*.log'
-    file_list = glob.glob(str(file_pattern))
-    delete_files(file_list)
+    log_folder_path = ROOT / 'log' / str(MARKET.lower()+"*.log")
+    file_pattern = glob.glob(str(log_folder_path))
+
+    delete_files(file_pattern)
 
     # Set the logger with logpath
     IBI_LOGPATH = ROOT / 'log' / f'{MARKET.lower()}_ib.log'
-    LOGURU_PATH = ROOT / 'log' / f'{MARKET.lower()}__app.log'
+    LOGURU_PATH = ROOT / 'log' / f'{MARKET.lower()}_app.log'
 
     util.logToFile(IBI_LOGPATH, level=logging.ERROR)
     logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
@@ -270,7 +285,7 @@ if __name__ == "__main__":
 
     else:
         delete_all_pickles(MARKET)
-        build_base()
+        build_base(puts_only=False)
 
     logger.info(program_timer.stop())
 

@@ -7,7 +7,7 @@ import pickle
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Iterable, Union, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -677,12 +677,10 @@ async def get_a_margin(ib: IB,
                        lot_path: Path=None):
     
     """Gets a margin"""
-    lot_size = 100 # Default for SNP
+    lot_size = 1 # Default for SNP
 
-    if lot_path:
+    if lot_path: # For NSE
         lot_size = get_pickle(lot_path).get(contract.symbol, None)
-    else:
-        lot_size = 100
 
     order = MarketOrder('SELL', lot_size)
 
@@ -749,3 +747,51 @@ async def get_margins(port: int,
     pbar.close()
 
     return df_out
+
+# ORDER PLACING WITH PORTFOLIO CHECKS
+# +++++++++++++++++++++++++++++++++++
+
+def place_orders(ib: IB, cos: Union[Tuple, List], blk_size: int = 25) -> List:
+    """!!!CAUTION!!!: This places orders in the system
+    NOTE: cos could be a single (contract, order)
+          or a tuple/list of ((c1, o1), (c2, o2)...)
+          made using tuple(zip(cts, ords))"""
+
+    trades = []
+
+    if isinstance(cos, (tuple, list)) and (len(cos) == 2):
+        c, o = cos
+        trades.append(ib.placeOrder(c, o))
+
+    else:
+        cobs = [cos[i:i + blk_size] for i in range(0, len(cos), blk_size)]
+
+        for b in tqdm(cobs):
+            for c, o in b:
+                td = ib.placeOrder(c, o)
+                trades.append(td)
+            ib.sleep(0.75)
+
+    return trades
+
+def quick_pf(ib) -> Union[None, pd.DataFrame]:
+    """Gets the portfolio dataframe"""
+    pf = ib.portfolio()  # returns an empty [] if there is nothing in the portfolio
+
+    if pf != []:
+        df_pf = util.df(pf)
+        df_pf = (util.df(list(df_pf.contract)).iloc[:, :6]).join(
+            df_pf.drop(columns=["contract", "account"]))
+        df_pf = df_pf.rename(
+            columns={
+                "lastTradeDateOrContractMonth": "expiry",
+                "marketPrice": "mktPrice",
+                "marketValue": "mktVal",
+                "averageCost": "avgCost",
+                "unrealizedPNL": "unPnL",
+                "realizedPNL": "rePnL",
+            })
+    else:
+        df_pf = None
+
+    return df_pf

@@ -13,6 +13,11 @@ COMMON:
   - Submitted
   BAR_FORMAT: "{desc:<10}{percentage:3.0f}%|{bar:25}{r_bar}{bar:-10b}"
 
+  OPT_COLS: # Common option columns for anlaysis
+   - ['conId', 'symbol', 'expiry', 'strike', 'right', 'dte', 'undPrice', 
+   'contract', 'iv', 'sigma', 'sdev', 'margin', 'comm', 
+   'lot_size', 'delta','gamma', 'vega', 'theta', 'optPrice', 'expPrice']
+
 # ----------------------------
 NSE:
 
@@ -25,8 +30,8 @@ NSE:
   MAXDTE: 60
 
   CALLSTDMULT: 2.3 # Min stdev multiple for calls
-  PUTSTDMULT: -1.9 # Min stdev multiple for puts
-  MINEXPROM: 1.2
+  PUTSTDMULT: -2.8 # Min stdev multiple for puts
+  MINEXPROM: 1.5
   MINOPTSELLPRICE: 0.2
 
   BLACKLIST: # Ref: https://zerodha.com/margin-calculator/SPAN/

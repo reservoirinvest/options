@@ -531,29 +531,51 @@ def make_target_option_contracts(df_target: list, MARKET: str):
     
     return option_contracts
 
+
+def target_options_with_adjusted_sdev(df_chains: pd.DataFrame, 
+                                      STDMULT: float,
+                                      how_many: int) -> pd.DataFrame:
+    
+    """Adjust the standard deviation to DTE, penalizes DTES closer to zero"""
+
+    # Get the extra SD adjusted to DTE
+    xtra_sd = 1-(df_chains.dte/100)
+
+    # Build the series for revised SD
+    sd_revised = STDMULT + xtra_sd if STDMULT > 0 else STDMULT - xtra_sd
+    # Identify the closest standerd devs to the revised SD
+
+    df_ch = df_chains.assign(sd_revised=sd_revised)
+    closest_sdevs = df_ch.groupby(['symbol', 'dte'])[['sdev', 'sd_revised']]\
+        .apply(lambda x: get_closest_values(x.sdev, 
+                                            x.sd_revised.min(), 
+                                            how_many))
+    closest_sdevs.name = 'sdev1' 
+
+    # Join the closest chains to the closest revised SD
+    df_ch1 = df_ch.set_index(['symbol', 'dte']).join(closest_sdevs)
+
+    # Get the target chains
+    df_ch2 = df_ch1[df_ch1.apply(lambda x: x.sdev in x.sdev1, axis=1)] \
+                        .reset_index()
+    
+    return df_ch2
+
+
 async def make_qualified_opts(port:int, 
                     df_chains: pd.DataFrame, 
                     MARKET: str,
                     STDMULT: int,
-                    how_many: int=-2,
+                    how_many: int,
                     CID: int=0,
                     desc: str='Qualifying Options'
                     ) -> pd.DataFrame:
     
     """Make naked puts from chains, based on PUTSTDMULT"""
-    
-    target_puts = df_chains.groupby('symbol').sdev.\
-        apply(lambda x: get_closest_values(x, STDMULT, how_many))
 
-    target_puts.name = 'puts_sd'
+    df_ch2 = target_options_with_adjusted_sdev(df_chains, STDMULT, how_many)
 
-    # integrate puts_sd range and compare with sdev
-    df_ch1 = df_chains.set_index('symbol').join(target_puts)
-
-    # filter target puts
-    df_ch2 = df_ch1[df_ch1.apply(lambda x: x.sdev in x.puts_sd, axis=1)].drop('puts_sd', axis=1)
-
-    df_target = df_ch2[['strike', 'expiry', 'right',]].reset_index()
+    df_target = df_ch2[['symbol', 'strike', 'expiry', 'right',]].reset_index()
 
     options_list = make_target_option_contracts(df_target, MARKET=MARKET)
 

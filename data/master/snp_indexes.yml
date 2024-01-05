@@ -1,7 +1,7 @@
 # CBOE Indexes to add to SnP 500 weeklies
 
 CBOE:
-  NANOS: Nanos S&P 500 Index
+  # NANOS: Nanos S&P 500 Index # KIV because it is 1 share per contract, versus 100 for traditional options
   SPX: S&P 500 Index
   XSP: Mini S&P 500 Index
   OEX: S&P 100 Index

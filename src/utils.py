@@ -665,7 +665,11 @@ async def get_opt_price_ivs(port: int,
         df = df.join(model_df, lsuffix='Model').\
                     join(ask_df, lsuffix='Ask').\
                         join(bid_df, lsuffix='Bid')
-        
+    
+    # puts optPrice column, if not in df
+    if not 'optPrice' in list(df):
+        df = df.assign(optPrice = df[['bid', 'ask', 'last', 'close']].max(axis=1))
+
     return df
 
 ### GET MARGINS AND COMMISSIONS

@@ -184,8 +184,9 @@ def create_target_opts(df_opt_margins: pd.DataFrame,
     df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
 
     # Get precise expected prices
-    xp = (MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) + \
-        df_naked_targets.comm/df_naked_targets.lot_size
+    xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) \
+          +df_naked_targets.comm) \
+            /df_naked_targets.lot_size
     
     expPrice = pd.concat([xp.clip(_vars.MINOPTSELLPRICE), 
                           df_naked_targets.optPrice], axis=1)\
@@ -223,14 +224,14 @@ def build_base(puts_only: bool = True):
                             df_chains, 
                             MARKET=MARKET,
                             STDMULT=PUTSTDMULT,
-                            how_many=-2, desc='Qualifying Puts'))     
+                            how_many=-1, desc='Qualifying Puts'))     
     pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
 
     df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
                         df_chains, 
                         MARKET=MARKET,
                         STDMULT=CALLSTDMULT,
-                        how_many=2, desc="Qualifying Calls"))     
+                        how_many=1, desc="Qualifying Calls"))     
     pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
 
     if puts_only:

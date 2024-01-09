@@ -31,8 +31,8 @@ NSE:
 
   CALLSTDMULT: 1.5 # Min stdev multiple for calls
   PUTSTDMULT: -1.5 # Min stdev multiple for puts
-  MINEXPROM: 1.2
-  MINOPTSELLPRICE: 0.2
+  MINEXPROM: 0.8
+  MINOPTSELLPRICE: 0.5
 
   BLACKLIST: # Ref: https://zerodha.com/margin-calculator/SPAN/
   - FINNIFTY
@@ -54,7 +54,7 @@ SNP:
 
   CALLSTDMULT: 1.5 # Min stdev multiple for calls
   PUTSTDMULT: -1.5 #  Min stdev multiple for puts
-  MINEXPROM: 1.2
+  MINEXPROM: 0.8
   MINOPTSELLPRICE: 0.5
   
 

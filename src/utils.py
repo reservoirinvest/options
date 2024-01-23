@@ -773,6 +773,53 @@ async def get_margins(port: int,
     pbar.close()
 
     return df_out
+    
+def create_target_opts(market: str) -> pd.DataFrame:
+
+    """Final naked target options with expected price"""
+    
+    MARKET = market.upper()
+    DATAPATH = ROOT / 'data' / MARKET
+
+    _vars = Vars(MARKET)
+    MINEXPROM = _vars.MINEXPROM
+    PREC = _vars.PREC
+    MINOPTSELLPRICE = _vars.MINOPTSELLPRICE        
+
+    df_opt_prices = get_pickle(DATAPATH / 'df_opt_prices.pkl')
+    df_opt_margins = get_pickle(DATAPATH / 'df_opt_margins.pkl')
+            
+
+    cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
+    df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
+
+    # Get precise expected prices
+    xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
+            df_naked_targets.comm)/df_naked_targets.lot_size
+
+    # Set the minimum option selling price
+    xp[xp < MINOPTSELLPRICE] = MINOPTSELLPRICE
+
+    # Make the expected Price
+    expPrice = pd.concat([xp, 
+                            df_naked_targets.optPrice], axis=1)\
+                            .max(axis=1)
+    expPrice = expPrice.apply(lambda x: get_prec(x, PREC))
+    df_naked_targets = df_naked_targets.assign(expPrice=expPrice)
+
+    # clean the nakeds
+    price_not_null = ~df_naked_targets.expPrice.isnull()
+    price_greater_than_zero = df_naked_targets.expPrice > 0
+
+    df = df_naked_targets[price_not_null & price_greater_than_zero].reset_index(drop=True)
+
+    # bump option price for those with expPrice = optPrice
+    opt_price_needs_bump = df.expPrice <= df.optPrice
+    new_opt_price = df[opt_price_needs_bump].expPrice + PREC
+    df.loc[opt_price_needs_bump, 'expPrice'] = new_opt_price
+
+    return df
+
 
 # ORDER PLACING WITH PORTFOLIO CHECKS
 # +++++++++++++++++++++++++++++++++++

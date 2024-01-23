@@ -10,10 +10,10 @@ from ib_insync import IB, Index, Stock, util
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
 
-from utils import (Timer, Vars, delete_all_pickles, delete_files, get_margins,
-                   get_opt_price_ivs, get_pickle, get_prec, make_chains,
-                   make_dict_of_qualified_contracts, make_qualified_opts,
-                   pickle_with_age_check, qualify_me)
+from utils import (Timer, Vars, create_target_opts, delete_all_pickles,
+                   delete_files, get_margins, get_opt_price_ivs, get_pickle,
+                   make_chains, make_dict_of_qualified_contracts,
+                   make_qualified_opts, pickle_with_age_check, qualify_me)
 
 ROOT = from_root() # Setting the root directory of the program
 MARKET = 'NSE'
@@ -25,6 +25,8 @@ CID = _vars.CID
 CALLSTDMULT = _vars.CALLSTDMULT
 PUTSTDMULT = _vars.PUTSTDMULT
 MINEXPROM = _vars.MINEXPROM
+MINOPTSELLPRICE = _vars.MINOPTSELLPRICE
+PREC = _vars.PREC
 
 # Set paths for nse pickles
 unds_path = ROOT / 'data' / MARKET / 'unds.pkl'
@@ -110,31 +112,6 @@ def make_nse_lots() -> dict:
               in zip(nse2ib(symbol_list,nse2ib_yml_path), lot_list)}
     
     return output
-
-
-# Combine all target option margins and prices
-def create_target_opts(df_opt_margins: pd.DataFrame,
-                        df_opt_prices: pd.DataFrame,
-                        MINEXPROM: float):
-    
-    """Final naked target options with expected price"""
-
-    cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
-    df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
-
-    # Get precise expected prices
-    xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
-          df_naked_targets.comm)/df_naked_targets.lot_size
-    
-    expPrice = pd.concat([xp.clip(_vars.MINOPTSELLPRICE), 
-                          df_naked_targets.optPrice], axis=1)\
-                            .max(axis=1)
-    
-    expPrice = expPrice.apply(lambda x: get_prec(x, 0.5))
-
-    df_naked_targets = df_naked_targets.assign(expPrice=expPrice)
-
-    return df_naked_targets
     
 
 def build_base(puts_only: bool = True):
@@ -187,13 +164,28 @@ def build_base(puts_only: bool = True):
     pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
 
     # Get alll the options
-    df_naked_targets = create_target_opts(df_opt_prices, 
-                                     df_opt_margins, 
-                                     _vars.MINEXPROM)
+    df_naked_targets = create_target_opts(market=MARKET)
     
     pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
 
     return None
+
+
+def nse_nakeds_from_pickles(MARKET:str = 'NSE') -> pd.DataFrame:
+    """Generates nakeds from existing margin and price pickles"""
+
+    opt_prices_path = ROOT / 'data' / MARKET / 'df_opt_prices.pkl'
+    opt_margins_path = ROOT / 'data' / MARKET / 'df_opt_margins.pkl'
+
+    df_opt_prices = get_pickle(opt_prices_path)
+    df_opt_margins = get_pickle(opt_margins_path)
+
+    df_naked_targets = create_target_opts(df_opt_prices, 
+                                    df_opt_margins, 
+                                    _vars.MINEXPROM)
+    
+    return df_naked_targets
+
 
 if __name__ == "__main__":    
 
@@ -218,10 +210,11 @@ if __name__ == "__main__":
     GET_FROM_PICKLES = False
 
     if GET_FROM_PICKLES:
-        unds = get_pickle(unds_path)
-        df_chains = get_pickle(chains_path)
-        lots = get_pickle(lots_path)
-        df_qualified_puts = get_pickle(qualified_puts_path)
+        df_opt_prices = get_pickle(opt_prices_path)
+        df_opt_margins = get_pickle(opt_margins_path)
+
+        df_naked_targets = create_target_opts(df_opt_prices, 
+                                     df_opt_margins)
 
     else:
         delete_all_pickles(MARKET)

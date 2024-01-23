@@ -15,8 +15,7 @@ COMMON:
 
   OPT_COLS: # Common option columns for anlaysis
    - ['conId', 'symbol', 'undPrice', 'expiry', 'strike', 'right', 'dte', 
-   'sdev', 'optPrice', 'expPrice', 'margin', 'comm', 
-   'lot_size']
+   'sdev', 'lot_size', 'margin', 'comm', 'ask', 'bid', 'last', 'optPrice', 'expPrice']
 
 # ----------------------------
 NSE:
@@ -29,10 +28,11 @@ NSE:
   MINDTE: 1
   MAXDTE: 60
 
-  CALLSTDMULT: 1.5 # Min stdev multiple for calls
-  PUTSTDMULT: -1.5 # Min stdev multiple for puts
-  MINEXPROM: 0.8
+  CALLSTDMULT: 1.8 # Min stdev multiple for calls
+  PUTSTDMULT: -1.7 # Min stdev multiple for puts
+  MINEXPROM: 1
   MINOPTSELLPRICE: 0.5
+  EXP2OPT: 10 # ratio of expected price to option price to reduce number of orders
 
   BLACKLIST: # Ref: https://zerodha.com/margin-calculator/SPAN/
   - FINNIFTY
@@ -50,12 +50,13 @@ SNP:
   CID: 2
   PAPER: 1301 # For paper trades in IBG
   MINDTE: 1
-  MAXDTE: 35
+  MAXDTE: 50
 
-  CALLSTDMULT: 1.5 # Min stdev multiple for calls
+  CALLSTDMULT: 1.7 # Min stdev multiple for calls
   PUTSTDMULT: -1.5 #  Min stdev multiple for puts
   MINEXPROM: 0.8
   MINOPTSELLPRICE: 0.5
+  EXP2OPT: 10 # ratio of expected price to option price to reduce number of orders
   
 
   BLACKLIST:

@@ -14,8 +14,9 @@ COMMON:
   BAR_FORMAT: "{desc:<10}{percentage:3.0f}%|{bar:25}{r_bar}{bar:-10b}"
 
   OPT_COLS: # Common option columns for anlaysis
-   - ['conId', 'symbol', 'undPrice', 'expiry', 'strike', 'right', 'dte', 
-   'sdev', 'lot_size', 'margin', 'comm', 'ask', 'bid', 'last', 'optPrice', 'expPrice']
+   - ['conId', 'symbol', 'undPrice', 'expiry', 'strike', 'right', 
+      'dte', 'sdev', 'lot_size', 'margin', 'comm', 'ask', 'bid', 
+      'last', 'optPrice', 'expPrice', 'prop', 'rom']
 
 # ----------------------------
 NSE:
@@ -25,14 +26,15 @@ NSE:
   PORT: 3000
   PAPER: 3001 # For paper trades in IBG
   CID: 1
-  MINDTE: 1
-  MAXDTE: 60
 
+  MINDTE: 2
+  MAXDTE: 60
   CALLSTDMULT: 1.8 # Min stdev multiple for calls
-  PUTSTDMULT: -1.7 # Min stdev multiple for puts
+  PUTSTDMULT: -1.8 # Min stdev multiple for puts
+
   MINEXPROM: 1
+
   MINOPTSELLPRICE: 0.5
-  EXP2OPT: 10 # ratio of expected price to option price to reduce number of orders
 
   BLACKLIST: # Ref: https://zerodha.com/margin-calculator/SPAN/
   - FINNIFTY
@@ -49,14 +51,15 @@ SNP:
   PORT: 1300
   CID: 2
   PAPER: 1301 # For paper trades in IBG
-  MINDTE: 1
-  MAXDTE: 50
 
-  CALLSTDMULT: 1.7 # Min stdev multiple for calls
-  PUTSTDMULT: -1.5 #  Min stdev multiple for puts
-  MINEXPROM: 0.8
+  MINDTE: 1
+  MAXDTE: 45
+  CALLSTDMULT: 1.8 # Min stdev multiple for calls
+  PUTSTDMULT: -1.8 #  Min stdev multiple for puts
+
+  MINEXPROM: 2
+
   MINOPTSELLPRICE: 0.5
-  EXP2OPT: 10 # ratio of expected price to option price to reduce number of orders
   
 
   BLACKLIST:

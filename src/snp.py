@@ -255,7 +255,7 @@ if __name__ == "__main__":
 
     else:
         delete_all_pickles(MARKET)
-        build_base(puts_only=False)
+        build_base(puts_only=True)
 
     logger.info(program_timer.stop())
 

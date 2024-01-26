@@ -17,6 +17,7 @@ from from_root import from_root
 from ib_insync import IB, Contract, MarketOrder, util
 from loguru import logger
 from tqdm.asyncio import tqdm
+from scipy.integrate import quad
 
 ROOT = from_root()
 BAR_FORMAT = "{desc:<10}{percentage:3.0f}%|{bar}{r_bar}"
@@ -125,6 +126,19 @@ def get_prec(v, base):
         output = None
 
     return output
+
+
+def get_prob(sd):
+    """Compute probability of a normal standard deviation
+
+    Arg:
+        (sd) as standard deviation
+    Returns:
+        probability as a float
+
+    """
+    prob = quad(lambda x: np.exp(-(x**2) / 2) / np.sqrt(2 * np.pi), -sd, sd)[0]
+    return prob
 
 
 def flatten(items):
@@ -260,7 +274,6 @@ async def qualify_me(ib: IB,
 def make_dict_of_qualified_contracts(qualified_contracts: list) -> dict:
     """Makes a dictionary of underlying contracts"""
 
-    # contracts_dict = {c[0].symbol: c[0] for c in qualified_contracts if c}
     contracts_dict = {c.symbol: c for c in qualified_contracts if c}
 
     return contracts_dict
@@ -289,7 +302,7 @@ def pickle_with_age_check(obj: dict,
 
     if to_pickle:
         pickle_me(obj, file_name_with_path)
-        logger.info(f"Pickled underlying contracts to {file_name_with_path}")
+        # logger.info(f"Pickled underlying contracts to {file_name_with_path}")
     else:
         logger.info(f"Not pickled as existing file age {existing_file_age.days} is < {minimum_age_in_days}")
 
@@ -773,6 +786,7 @@ async def get_margins(port: int,
     pbar.close()
 
     return df_out
+
     
 def create_target_opts(market: str) -> pd.DataFrame:
 
@@ -797,6 +811,9 @@ def create_target_opts(market: str) -> pd.DataFrame:
     xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
             df_naked_targets.comm)/df_naked_targets.lot_size
 
+    if MARKET == 'SNP':
+        xp = xp/100 # correction for lot_size
+
     # Set the minimum option selling price
     xp[xp < MINOPTSELLPRICE] = MINOPTSELLPRICE
 
@@ -817,6 +834,69 @@ def create_target_opts(market: str) -> pd.DataFrame:
     opt_price_needs_bump = df.expPrice <= df.optPrice
     new_opt_price = df[opt_price_needs_bump].expPrice + PREC
     df.loc[opt_price_needs_bump, 'expPrice'] = new_opt_price
+
+    # for SNP lot_size should be multiple of 100 for correct rom
+    rom=df.expPrice*df.lot_size/df.margin*365/df.dte
+
+    if MARKET == 'SNP':
+        rom = rom * 100
+
+    df = df.assign(prop = df.sdev.apply(get_prob),
+                   rom=rom)
+
+    return df
+
+
+def prepare_to_sow(market: str) -> pd.DataFrame():
+    """Prepares the naked sow dataframe"""
+
+    MARKET = market.upper()
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    df = create_target_opts(market=MARKET)
+
+    # Get the portfolio and open orders
+    with IB().connect(port=PORT) as ib:
+        ib.reqAllOpenOrders() 
+        df_pf = quick_pf(ib)
+
+    # Remove targets which are already in the portfolio
+    if isinstance(df_pf, pd.DataFrame):
+        df = df[~df.symbol.isin(set(df_pf.symbol))]
+
+    # Remove symbols with open orders
+    trades = ib.trades()
+    if trades:
+        all_trades_df = (util.df(t.contract for t in trades).join(
+            util.df(t.orderStatus
+                    for t in trades)).join(util.df(t.order for t in trades),
+                                            lsuffix="_"))
+
+        all_trades_df.rename({"lastTradeDateOrContractMonth": "expiry"},
+                                axis="columns",
+                                inplace=True)
+        trades_cols = ["conId", "symbol", "secType", "expiry",
+            "strike", "right", "orderId", "permId", "action",
+            "totalQuantity", "lmtPrice", "status",]
+
+        dfo = all_trades_df[trades_cols]
+        df_openords = dfo[all_trades_df.status.isin(_vars.ACTIVE_STATUS)]
+
+    else:
+        df_openords = pd.DataFrame([{'symbol': None}])
+        
+
+    if ~df_openords.empty:  # There are some open orders
+        df = df[~df.symbol.isin(set(df_openords.symbol))]
+
+    # Keep options with margin and expected price only
+    margins_only = ~df.margin.isnull()
+    with_expPrice = ~df.expPrice.isnull()
+
+    cleaned = margins_only & with_expPrice
+
+    df = df[cleaned]
 
     return df
 

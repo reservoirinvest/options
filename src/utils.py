@@ -1,26 +1,34 @@
 import asyncio
 import datetime
 import glob
+import logging
 import math
 import os
 import pickle
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Union, Tuple, List
+from typing import Iterable, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import pytz
 import yaml
 from from_root import from_root
-from ib_insync import IB, Contract, MarketOrder, util
+from ib_insync import IB, Contract, MarketOrder, util, Index, Stock
 from loguru import logger
-from tqdm.asyncio import tqdm
+from nsepython import fnolist, nse_get_fno_lot_sizes
 from scipy.integrate import quad
+from tqdm.asyncio import tqdm
+
+# from data.master.dclass import OpenOrder
+from dclass import OpenOrder, Portfolio
 
 ROOT = from_root()
 BAR_FORMAT = "{desc:<10}{percentage:3.0f}%|{bar}{r_bar}"
+
+# dclass = str(ROOT / 'data' / 'master' / 'dclass.py')
+# subprocess.run(["python", dclass])
 
 @dataclass
 class Timediff:
@@ -93,7 +101,7 @@ def delete_files(file_list: list):
         except Exception as e:
             print(f"Failed to delete {file_path}. Error: {str(e)}")
             with open(file_path, "w") as file:
-                file.write(None)
+                file.write('')
 
     # print("All files deleted successfully.")
 
@@ -142,7 +150,7 @@ def get_prob(sd):
 
 
 def flatten(items):
-    """Yield items from any nested iterable; see Reference."""
+    """Yield items from any nested iterable"""
     for x in items:
         if isinstance(x, Iterable) and not isinstance(x, (str, bytes)):
             for sub_x in flatten(x):
@@ -234,7 +242,7 @@ def get_dte(dt: Union[datetime.datetime, datetime.date, str],
     Args: dt as datetime.datetime | datetime.date\n 
           exchange as 'nse'|'snp'\n
           time_stamp boolean gives market close in local timestamp\n
-    Rets: dte as float | timestamp in local timzeone"""
+    Rets: dte as float | timestamp in local timzeone (or) NaN"""
 
     if type(dt) is str:
         dt = pd.to_datetime(dt)
@@ -247,12 +255,15 @@ def get_dte(dt: Union[datetime.datetime, datetime.date, str],
 
     now = datetime.datetime.now(tz=mkt_tz)
 
-    mkt_close = datetime.datetime.combine(dt.date(), mkt_close_time).astimezone(mkt_tz)
+    try:
+        mkt_close = datetime.datetime.combine(dt.date(), mkt_close_time).astimezone(mkt_tz)
+    except OSError:
+        dte = np.nan
+    else:
+        dte = (mkt_close-now).total_seconds()/24/3600
 
-    dte = (mkt_close-now).total_seconds()/24/3600
-
-    if time_stamp:
-        dte = mkt_close
+        if time_stamp:
+            dte = mkt_close
 
     return dte
 
@@ -288,14 +299,17 @@ def pickle_me(obj, file_name_with_path: Path):
 
 def pickle_with_age_check(obj: dict, 
                 file_name_with_path: Path, 
-                minimum_age_in_days: int=1):
+                minimum_age_in_days: float=1):
     """Pickles an object after checking file age"""
 
     existing_file_age = get_file_age(file_name_with_path)
+    
+    seconds_in_a_day = 24*60*60
+    file_age_in_days = existing_file_age.td.total_seconds() / seconds_in_a_day
 
     if existing_file_age is None: # No file exists
         to_pickle = True
-    elif existing_file_age.days > minimum_age_in_days:
+    elif file_age_in_days >= minimum_age_in_days:
         to_pickle = True
     else:
         to_pickle = False
@@ -304,7 +318,7 @@ def pickle_with_age_check(obj: dict,
         pickle_me(obj, file_name_with_path)
         # logger.info(f"Pickled underlying contracts to {file_name_with_path}")
     else:
-        logger.info(f"Not pickled as existing file age {existing_file_age.days} is < {minimum_age_in_days}")
+        logger.info(f"Not pickled as {file_name_with_path}'s age {existing_file_age.days} is < {minimum_age_in_days}")
 
 
 def get_pickle(path: Path):
@@ -556,8 +570,8 @@ def target_options_with_adjusted_sdev(df_chains: pd.DataFrame,
 
     # Build the series for revised SD
     sd_revised = STDMULT + xtra_sd if STDMULT > 0 else STDMULT - xtra_sd
-    # Identify the closest standerd devs to the revised SD
 
+    # Identify the closest standerd devs to the revised SD\
     df_ch = df_chains.assign(sd_revised=sd_revised)
     closest_sdevs = df_ch.groupby(['symbol', 'dte'])[['sdev', 'sd_revised']]\
         .apply(lambda x: get_closest_values(x.sdev, 
@@ -711,6 +725,7 @@ def clean_a_margin(wif, conId):
 
     return d
 
+
 async def get_a_margin(ib: IB, 
                        contract,
                        lot_path: Path=None):
@@ -796,6 +811,7 @@ def create_target_opts(market: str) -> pd.DataFrame:
     DATAPATH = ROOT / 'data' / MARKET
 
     _vars = Vars(MARKET)
+
     MINEXPROM = _vars.MINEXPROM
     PREC = _vars.PREC
     MINOPTSELLPRICE = _vars.MINOPTSELLPRICE        
@@ -846,27 +862,346 @@ def create_target_opts(market: str) -> pd.DataFrame:
 
     return df
 
+# NSE SPECIFIC FUNCTIONS
+#=======================
 
-def prepare_to_sow(market: str) -> pd.DataFrame():
-    """Prepares the naked sow dataframe"""
+def nse2ib(nselist: list, path_to_yaml_file: Path) -> list:
+    """Convert NSE symbols to IB friendly ones"""
 
+    # get substitutions from YAML file
+    with open(path_to_yaml_file, 'r') as f:
+        subs = yaml.load(f, Loader=yaml.FullLoader)
+    
+    list_without_percent_sign = list(map(subs.get, nselist, nselist))
+
+    # fix length to 9 characters
+    ib_fnos = [s[:9] for s in list_without_percent_sign]
+
+    return ib_fnos
+
+
+def make_unqualified_nse_underlyings(symbols: list) -> list:
+    """Makes raw underlying contracts for NSE"""
+
+    contracts = [Index(symbol, 'NSE', 'INR') 
+           if 'NIFTY' in symbol 
+                else Stock(symbol, 'NSE', 'INR') 
+            for symbol in symbols]
+    
+    return contracts
+
+
+async def assemble_nse_underlyings(port: int) -> dict:
+    """Assembles a dictionary of NSE underlying contracts"""
+
+    with await IB().connectAsync(port=port) as ib:
+
+        # get FNO list
+        fnos = fnolist()
+
+        # remove blacklisted symbols - like NIFTYIT that doesn't have options
+        nselist = [n for n in fnos if n not in Vars('NSE').BLACKLIST]
+
+        # clean to get IB FNOs
+        nse2ib_yml_path = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
+        ib_fnos = nse2ib(nselist, nse2ib_yml_path)
+
+        # make raw underlying fnos
+        raw_nse_contracts = make_unqualified_nse_underlyings(ib_fnos)
+
+        # qualify underlyings
+        qualified_unds = await qualify_me(ib, raw_nse_contracts, desc='Qualifying Unds')
+
+        unds_dict = make_dict_of_qualified_contracts(qualified_unds)
+
+        return unds_dict
+
+
+def make_nse_lots() -> dict:
+    """Generates lots for nse on cleansed IB symbols"""
+
+    BLACKLIST = Vars('NSE').BLACKLIST
+    lots = nse_get_fno_lot_sizes()
+    
+    clean_lots = {k: v for k, v 
+                  in lots.items() 
+                  if k not in BLACKLIST}
+    
+    # splits dict
+    symbol_list, lot_list = zip(*clean_lots.items()) 
+    
+    nse2ib_yml_path = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
+    output = {k: v for k, v 
+              in zip(nse2ib(symbol_list,nse2ib_yml_path), lot_list)}
+    
+    return output
+
+
+# SNP SPECIFIC FUNCTION
+# =====================
+
+def read_weeklys() -> pd.DataFrame:
+    """gets weekly cboe symbols"""
+
+    dls = "http://www.cboe.com/products/weeklys-options/available-weeklys"
+    df = pd.read_html(dls)[0]
+
+    return df
+
+
+def rename_weekly_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """standardizes column names of cboe"""
+    
+    df.columns=['desc', 'symbol']
+
+    return df
+
+
+def remove_non_char_symbols(df: pd.DataFrame) -> pd.DataFrame:
+    """removes symbols with non-chars - like dots (BRK.B)"""
+    
+    df = df[df.symbol.str.extract("([^a-zA-Z])").isna()[0]]
+
+    return df
+
+
+def make_weekly_cboes() -> pd.DataFrame:
+    """
+    Generates a weekly cboe symbols dataframe
+    """
+
+    df = (
+        read_weeklys()
+        .pipe(rename_weekly_columns)
+        .pipe(remove_non_char_symbols)
+        )
+    
+    # add exchange
+    df = df.assign(exchange='SMART')
+    
+    return df
+
+
+def get_snps() -> pd.Series:
+    """
+    gets snp symbols from wikipedia
+    """
+    snp_url =  "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    snps = pd.read_html(snp_url)[0]['Symbol']
+    return snps
+
+
+def add_indexes(df: pd.DataFrame, path_to_yaml_file: str) -> pd.DataFrame:
+    """
+    add indexes from config/snp_indexes.yaml
+    """
+    with open(path_to_yaml_file, 'r') as f:
+        kv_pairs = yaml.load(f, Loader=yaml.FullLoader)
+
+    dfs = []
+    for k in kv_pairs.keys():
+        dfs.append(pd.DataFrame(list(kv_pairs[k].items()), 
+            columns=['symbol', 'desc'])
+            .assign(exchange = k))
+        
+    more_df = pd.concat(dfs, ignore_index=True)
+
+    df_all = pd.concat([df, more_df], ignore_index=True)
+    
+    return df_all
+
+
+def split_stocks_and_index(df: pd.DataFrame) -> pd.DataFrame:
+    """differentiates stocks and index"""
+    
+    df = df.assign(secType=np.where(df.desc.str.contains('Index'), 'IND', 'STK'))
+
+    return df
+
+
+def make_snp_weeklies(indexes_path: Path):
+    """Makes snp weeklies with indexes"""
+
+    # get snp stock weeklies
+    df_weekly_cboes = make_weekly_cboes()
+    snps = get_snps()
+
+    # filter weekly snps
+    df_weekly_snps = df_weekly_cboes[df_weekly_cboes.symbol.isin(snps)] \
+                    .reset_index(drop=True)
+
+    # add index weeklies
+    df_weeklies = (
+        add_indexes(df_weekly_snps, indexes_path)
+        .pipe(split_stocks_and_index)
+        )
+    
+    return df_weeklies
+
+
+def make_unqualified_snp_underlyings(df: pd.DataFrame) -> pd.DataFrame:
+    """Build underlying contracts"""
+
+    contracts = [Stock(symbol=symbol, exchange=exchange, currency='USD') 
+                if 
+                    secType == 'STK'
+                else 
+                    Index(symbol=symbol, exchange=exchange, currency='USD') 
+                for 
+                    symbol, secType, exchange in zip(df.symbol, df.secType, df.exchange)]
+    
+    df = df.assign(contract = contracts)
+
+    return df
+    
+
+async def assemble_snp_underlyings(port: int) -> dict:
+    """Assembles a dictionary of SNP underlying contracts"""
+
+    PORT = Vars('SNP').PORT
+    CID = Vars('SNP').CID
+
+    indexes_path = ROOT / 'data' / 'master' / 'snp_indexes.yml'
+    
+    df = make_snp_weeklies(indexes_path) \
+         .pipe(make_unqualified_snp_underlyings)
+    
+    contracts = df.contract.to_list()
+
+    with await IB().connectAsync(port=PORT, clientId=CID) as ib:
+    
+        qualified_contracts = await qualify_me(ib, contracts, desc="Qualifying Unds")
+
+    underlying_contracts = make_dict_of_qualified_contracts(qualified_contracts)
+
+    return underlying_contracts
+
+
+
+def build_base(market: str, 
+               puts_only: bool = True) -> pd.DataFrame:
+    """Freshly build the base and pickle"""
+
+    # Set variables
     MARKET = market.upper()
     _vars = Vars(MARKET)
     PORT = _vars.PORT
 
-    df = create_target_opts(market=MARKET)
+    CALLSTDMULT = _vars.CALLSTDMULT
+    PUTSTDMULT = _vars.PUTSTDMULT
 
-    # Get the portfolio and open orders
-    with IB().connect(port=PORT) as ib:
-        ib.reqAllOpenOrders() 
-        df_pf = quick_pf(ib)
+    # Start the timer
+    program_timer = Timer(f"{MARKET} base building")
+    program_timer.start()
 
-    # Remove targets which are already in the portfolio
-    if isinstance(df_pf, pd.DataFrame):
-        df = df[~df.symbol.isin(set(df_pf.symbol))]
+    # # needed only for this function!
+    # from nse import assemble_nse_underlyings, make_nse_lots
+    # from snp import assemble_snp_underlyings
 
-    # Remove symbols with open orders
+    # Set paths for nse pickles
+    unds_path = ROOT / 'data' / MARKET / 'unds.pkl'
+    chains_path = ROOT / 'data' / MARKET / 'df_chains.pkl'
+    lots_path = ROOT / 'data' / MARKET / 'lots.pkl'
+
+    qualified_puts_path = ROOT / 'data' / MARKET / 'df_qualified_puts.pkl'
+    qualified_calls_path = ROOT / 'data' / MARKET / 'df_qualified_calls.pkl'
+
+    opt_prices_path = ROOT / 'data' / MARKET / 'df_opt_prices.pkl'
+    opt_margins_path = ROOT / 'data' / MARKET / 'df_opt_margins.pkl'
+
+    naked_targets_path = ROOT / 'data' / MARKET / 'df_naked_targets.pkl'
+
+    # Delete log files
+    log_folder_path = ROOT / 'log' / str(MARKET.lower()+"*.log")
+    file_pattern = glob.glob(str(log_folder_path))
+
+    delete_files(file_pattern)
+
+    # Set the logger with logpath
+    IBI_LOGPATH = ROOT / 'log' / f'{MARKET.lower()}_ib.log'
+    LOGURU_PATH = ROOT / 'log' / f'{MARKET.lower()}_app.log'
+
+    util.logToFile(IBI_LOGPATH, level=logging.ERROR)
+    logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
+
+    # Assemble underlyings
+    if MARKET == 'SNP':
+        unds = asyncio.run(assemble_snp_underlyings(PORT))
+    else:
+        unds = asyncio.run(assemble_nse_underlyings(PORT))
+
+    # pickle underlyings
+    pickle_with_age_check(unds, unds_path, 0)
+
+    # Make chains for underlyings and limit the dtes
+    df_chains = asyncio.run(make_chains(port=PORT,
+                                        MARKET=MARKET, 
+                                        contracts=list(unds.values())))
+    df_chains = df_chains[df_chains.dte <= _vars.MAXDTE].reset_index(drop=True)
+    pickle_with_age_check(df_chains, chains_path, 0)
+
+    # Qualified put and options generated from the chains
+    df_qualified_puts = asyncio.run(make_qualified_opts(PORT, 
+                            df_chains, 
+                            MARKET=MARKET,
+                            STDMULT=PUTSTDMULT,
+                            how_many=-1, desc='Qualifying Puts'))     
+    pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
+
+    df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
+                        df_chains, 
+                        MARKET=MARKET,
+                        STDMULT=CALLSTDMULT,
+                        how_many=1, desc="Qualifying Calls"))     
+    pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
+
+    if puts_only:
+        df_all_qualified_options = df_qualified_puts
+    else:
+        df_all_qualified_options = pd.concat([df_qualified_calls, 
+                                          df_qualified_puts], 
+                                          ignore_index=True)
+
+    # Get the option prices
+    df_opt_prices = asyncio.run(get_opt_price_ivs(PORT, df_all_qualified_options))
+    pickle_with_age_check(df_opt_prices, opt_prices_path, 0)
+
+    # Get the lots for nse
+    if MARKET == 'NSE':
+        lots = make_nse_lots()        
+        pickle_with_age_check(lots, lots_path, 0)
+
+    # Get the option margins
+    if MARKET == 'NSE':
+        df_opt_margins = asyncio.run(get_margins(PORT, 
+                                                 df_all_qualified_options, 
+                                                 lots_path))
+    else: # no need for lots_path
+        df_opt_margins = asyncio.run(get_margins(PORT, 
+                                                 df_all_qualified_options))
+    pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
+
+    # Get alll the options
+    df_naked_targets = create_target_opts(market=MARKET)
+    pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
+
+    program_timer.stop()
+
+    return df_naked_targets
+
+
+async def get_open_orders(ib) -> pd.DataFrame:
+    """Gets open orders in a df"""
+
+    # ACTIVE_STATUS is common for nse and snp
+    ACTIVE_STATUS = Vars('SNP').ACTIVE_STATUS 
+
+    df_openords = OpenOrder().empty() #Initialize open orders
+
+    await ib.reqAllOpenOrdersAsync()
+
     trades = ib.trades()
+
     if trades:
         all_trades_df = (util.df(t.contract for t in trades).join(
             util.df(t.orderStatus
@@ -876,16 +1211,38 @@ def prepare_to_sow(market: str) -> pd.DataFrame():
         all_trades_df.rename({"lastTradeDateOrContractMonth": "expiry"},
                                 axis="columns",
                                 inplace=True)
-        trades_cols = ["conId", "symbol", "secType", "expiry",
-            "strike", "right", "orderId", "permId", "action",
-            "totalQuantity", "lmtPrice", "status",]
+        
+        trades_cols = df_openords.columns
 
         dfo = all_trades_df[trades_cols]
-        df_openords = dfo[all_trades_df.status.isin(_vars.ACTIVE_STATUS)]
+        dfo = dfo.assign(expiry=pd.to_datetime(dfo.expiry))
+        df_openords = dfo[all_trades_df.status.isin(ACTIVE_STATUS)]
 
-    else:
-        df_openords = pd.DataFrame([{'symbol': None}])
-        
+    return df_openords
+
+
+def prepare_to_sow(market: str, 
+                   build_from_scratch: bool=False) -> pd.DataFrame():
+    """Prepares the naked sow dataframe"""
+
+    MARKET = market.upper()
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    puts_only = True if MARKET == 'SNP' else False
+
+    if build_from_scratch:
+        build_base(market=MARKET, 
+                        puts_only=puts_only)
+
+    df = create_target_opts(market=MARKET)
+
+    # Get the portfolio and open orders        
+    df_openords, df_pf = asyncio.run(get_order_pf(PORT))
+
+    # Remove targets which are already in the portfolio
+    if isinstance(df_pf, pd.DataFrame):
+        df = df[~df.symbol.isin(set(df_pf.symbol))]      
 
     if ~df_openords.empty:  # There are some open orders
         df = df[~df.symbol.isin(set(df_openords.symbol))]
@@ -927,6 +1284,7 @@ def place_orders(ib: IB, cos: Union[Tuple, List], blk_size: int = 25) -> List:
 
     return trades
 
+
 def quick_pf(ib) -> Union[None, pd.DataFrame]:
     """Gets the portfolio dataframe"""
     pf = ib.portfolio()  # returns an empty [] if there is nothing in the portfolio
@@ -945,6 +1303,177 @@ def quick_pf(ib) -> Union[None, pd.DataFrame]:
                 "realizedPNL": "rePnL",
             })
     else:
-        df_pf = None
+        df_pf = Portfolio().empty()
 
     return df_pf
+
+async def get_order_pf(PORT):
+    """Gets the open orders and portfolios"""
+    with await IB().connectAsync(port=PORT) as ib:
+        df_openords = await get_open_orders(ib)
+        df_pf = quick_pf(ib)
+
+        return df_openords, df_pf
+
+
+
+# !!! TEMPORARY PREPARE TO SOW
+def prepare_to_sow_temp(market: str, 
+                   build_from_scratch: bool=False) -> pd.DataFrame():
+    """Prepares the naked sow dataframe"""
+
+    MARKET = market.upper()
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    puts_only = True if MARKET == 'SNP' else False
+
+    if build_from_scratch:
+        build_base_temp(market=MARKET, 
+                        puts_only=puts_only)
+
+    df = create_target_opts(market=MARKET)
+
+    # Get the portfolio and open orders        
+    df_openords, df_pf = asyncio.run(get_order_pf(PORT))    
+
+    # Remove targets which are already in the portfolio
+    if isinstance(df_pf, pd.DataFrame):
+        df = df[~df.symbol.isin(set(df_pf.symbol))]      
+
+    if ~df_openords.empty:  # There are some open orders
+        df = df[~df.symbol.isin(set(df_openords.symbol))]
+
+    # Keep options with margin and expected price only
+    margins_only = ~df.margin.isnull()
+    with_expPrice = ~df.expPrice.isnull()
+
+    cleaned = margins_only & with_expPrice
+
+    df = df[cleaned]
+
+    return df
+
+
+
+# !!! build_base temporary
+def build_base_temp(market: str, 
+               puts_only: bool = True) -> pd.DataFrame:
+    """Freshly build the base and pickle"""
+
+
+    # needed only for this function!
+    # from nse import assemble_nse_underlyings, make_nse_lots
+    # from snp import assemble_snp_underlyings
+
+    # Set variables
+    MARKET = market.upper()
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    CALLSTDMULT = _vars.CALLSTDMULT
+    PUTSTDMULT = _vars.PUTSTDMULT
+
+    # Start the timer
+    program_timer = Timer(f"{MARKET} base building")
+    program_timer.start()
+
+    # Set paths for nse pickles
+    unds_path = ROOT / 'data' / MARKET / 'unds.pkl'
+    chains_path = ROOT / 'data' / MARKET / 'df_chains.pkl'
+    lots_path = ROOT / 'data' / MARKET / 'lots.pkl'
+
+    qualified_puts_path = ROOT / 'data' / MARKET / 'df_qualified_puts.pkl'
+    qualified_calls_path = ROOT / 'data' / MARKET / 'df_qualified_calls.pkl'
+
+    opt_prices_path = ROOT / 'data' / MARKET / 'df_opt_prices.pkl'
+    opt_margins_path = ROOT / 'data' / MARKET / 'df_opt_margins.pkl'
+
+    naked_targets_path = ROOT / 'data' / MARKET / 'df_naked_targets.pkl'
+
+    # # Delete log files
+    # log_folder_path = ROOT / 'log' / str(MARKET.lower()+"*.log")
+    # file_pattern = glob.glob(str(log_folder_path))
+
+    # delete_files(file_pattern)
+
+    # Set the logger with logpath
+    IBI_LOGPATH = ROOT / 'log' / f'{MARKET.lower()}_ib.log'
+    LOGURU_PATH = ROOT / 'log' / f'{MARKET.lower()}_app.log'
+
+    util.logToFile(IBI_LOGPATH, level=logging.ERROR)
+    logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
+
+    # Assemble underlyings
+    # if MARKET == 'SNP':
+    #     unds = asyncio.run(assemble_snp_underlyings(PORT))
+    # else:
+    #     unds = asyncio.run(assemble_nse_underlyings(PORT))
+    unds = {k: v for k, v in get_pickle(unds_path).items() if k in ['MMM']}
+
+    # # pickle underlyings
+    # pickle_with_age_check(unds, unds_path, 0)
+
+    # Make chains for underlyings and limit the dtes
+    df_chains = asyncio.run(make_chains(port=PORT,
+                                        MARKET=MARKET, 
+                                        contracts=list(unds.values())))
+    df_chains = df_chains[df_chains.dte <= _vars.MAXDTE].reset_index(drop=True)
+    # pickle_with_age_check(df_chains, chains_path, 0)
+
+    # Qualified put and options generated from the chains
+    df_qualified_puts = asyncio.run(make_qualified_opts(PORT, 
+                            df_chains, 
+                            MARKET=MARKET,
+                            STDMULT=PUTSTDMULT,
+                            how_many=-1, desc='Qualifying Puts'))     
+    # pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
+
+    df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
+                        df_chains, 
+                        MARKET=MARKET,
+                        STDMULT=CALLSTDMULT,
+                        how_many=1, desc="Qualifying Calls"))     
+    # pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
+
+    if puts_only:
+        df_all_qualified_options = df_qualified_puts
+    else:
+        df_all_qualified_options = pd.concat([df_qualified_calls, 
+                                            df_qualified_puts], 
+                                            ignore_index=True)
+
+    # Get the option prices
+    df_opt_prices = asyncio.run(get_opt_price_ivs(PORT, df_all_qualified_options))
+    # pickle_with_age_check(df_opt_prices, opt_prices_path, 0)
+
+    # Get the lots for nse
+    if MARKET == 'NSE':
+        lots = make_nse_lots()        
+        # pickle_with_age_check(lots, lots_path, 0)
+
+    # Get the option margins
+    if MARKET == 'NSE':
+        df_opt_margins = asyncio.run(get_margins(PORT, 
+                                                    df_all_qualified_options, 
+                                                    lots_path))
+    else: # no need for lots_path
+        df_opt_margins = asyncio.run(get_margins(PORT, 
+                                                    df_all_qualified_options))
+    # pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
+
+    # Get alll the options
+    df_naked_targets = create_target_opts(market=MARKET)
+    # pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
+
+    program_timer.stop()
+
+    return df_naked_targets
+
+if __name__ == "__main__":
+
+    MARKET = 'NSE'
+    
+    df = prepare_to_sow(MARKET, 
+                        build_from_scratch=True)
+    print(df)

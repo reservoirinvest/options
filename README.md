@@ -15,30 +15,28 @@
 # For SNP
 
 - [x] Keep PUTS ONLY for SNP nakeds
-- [ ] Every sowed option should have a closing order reaps
-- [ ] Every long stock should have a covered call in next month's expiry and protective put in 3 months
-- [ ] Every short stock should have a covered put in next month's expiry and protective call in 3 months
+- [ ] Every sowed option should have a closing order that reaps
+- [ ] Every long stock should have a covered call in next week's expiry and protective put in 3 months
+- [ ] Every short stock should have a covered put in next week's expiry and protective call in 3 months
 - [ ] Every symbol should have its own standard deviations for naked sows, covers and protections
 
 # For NSE
 - [ ] Every sowed option should have a closing order that reaps
 
-# Symbol `States`.
+# Symbol `States` with colours.
 
-- 'unsowed': No orders to sow. No existing position.
-- 'orphaned' : A call or put buy option that doesn't have an underlying position.
+- 'unsowed': No orders to sow. No existing position. [white]
+- 'orphaned' : A call or put buy option position that doesn't have an underlying position. [grey]
 
-- 'perfect': Position present that is both covered and protected.
+- 'perfect': Ticker position present that is both covered and protected (or) Option position that is with a reap order. [green]
   
-- 'uncovered': Position present but with no covered call or put option and without any open orders
-- 'unprotected': Position present but with no protective call or put option and without any open orders
-- 'imperfect': Position present that has no cover or protection options and without any open orders
+- 'uncovered': Ticker position present but with no covered call or put option and without any option open orders supporting it [yellow]
+- 'unprotected': Ticker position present but with no protective call or put option and without any option open orders [light-red]
+- 'imperfect': Ticker position present that has no cover or protection options and without any option open orders [purple]
   
-- 'sowing' : Orders present to be sowed.
-- 'covering' : Position protected with option but not covered and has open orders to cover
-- 'protecting' : Position covered with option but not protected and has open orders to protect
-- 'perfecting' : Position with open orders for covering and protecting
+- 'sowing' : Naked Option orders present to be sowed. [blue]
+- 'covering' : Ticker position is protected with option but not covered and has option open orders to cover [cream]
+- 'protecting' : Ticker position is covered with option but not protected and has option open orders to protect [pink]
+- 'perfecting' : Ticker position with open orders for covering and protecting, that are not in position yet [light-green]
 
-- 'unreaped' : A naked call or put option that doesn't have an open order to reap.
-- 'reaping' : A naked call or put that has an open order to reap
-
+- 'unreaped' : A naked call or put option that doesn't have an open order to reap. [light-yellow]

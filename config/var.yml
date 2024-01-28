@@ -6,11 +6,12 @@ COMMON:
   MASTER: 10 # Master client for retrieving ALL (manual and API) orders and trades
   COMMONCID: 0
 
-  ACTIVE_STATUS:
+  ACTIVE_STATUS: # For open orders
   - ApiPending
   - PendingSubmit
   - PreSubmitted
   - Submitted
+  
   BAR_FORMAT: "{desc:<10}{percentage:3.0f}%|{bar:25}{r_bar}{bar:-10b}"
 
   OPT_COLS: # Common option columns for anlaysis

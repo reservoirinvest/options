@@ -56,15 +56,3 @@ def make_name(obj) -> str:
             name = li[0].symbol
 
     return name
-
-
-def chunk_me(data: list, size: int=25) -> list:
-    """cuts the list into chunks"""
-
-    if type(data) is not list:
-        logger.error(f"Data type needs to be a `list`, not {type(data)}")
-        output = None
-    else:
-        output = [data[x: x+size] for x in range(0, len(data), size)]
-
-    return output

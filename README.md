@@ -7,7 +7,8 @@
 
 
 - [x] Build RoM for naked_targets
-- [ ] Automate `sow`
+- [x] Automate `sow`
+- [ ] Build `run.py` with a simple CLI
 - [ ] Make function for getting status of a symbol (See `Symbol Statuses` below)
 - [ ] Make functions for `cancel_api_ords` and `cancel_all_ords`
 - [ ] place closing orders for existing `reap`
@@ -26,7 +27,7 @@
 # Symbol `States` with colours.
 
 - 'unsowed': No orders to sow. No existing position. [white]
-- 'orphaned' : A call or put buy option position that doesn't have an underlying position. [grey]
+- 'orphaned' : A long call or put option (positive) position that doesn't have an underlying position. [grey]
 
 - 'perfect': Ticker position present that is both covered and protected (or) Option position that is with a reap order. [green]
   
@@ -40,3 +41,6 @@
 - 'perfecting' : Ticker position with open orders for covering and protecting, that are not in position yet [light-green]
 
 - 'unreaped' : A naked call or put option that doesn't have an open order to reap. [light-yellow]
+
+# Good reads
+1. Check out [Covered calls writing with protective put](https://www.thebluecollarinvestor.com/covered-call-writing-with-protective-puts-a-proposed-strategy/) article

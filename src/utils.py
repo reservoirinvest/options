@@ -86,6 +86,83 @@ class Vars:
             setattr(self, k.upper(), v)
 
 
+def make_a_choice(choice_list: list,
+                  msg_header: str="Choose from the following:"):
+
+    """
+    Outputs a dictionary from the choices made
+    Use next(iter(output.keys())) to get the choice number
+    """
+
+    # Processing
+    choice_dict = {i+1 : v for i, v in enumerate(choice_list)}
+    choice_dict[0] = 'Exit'
+
+    # loop through choice
+    ask = f"{msg_header}\n"
+
+    for choice, value in choice_dict.items():
+        if choice > 0:
+            ask = ask + f"{str(choice)}) {value}\n"
+        else:
+            ask = ask + f"\n{str(choice)}) {value}\n"
+
+    while True:
+        data = input(ask) # check for int in input
+        try:
+            selected_int = int(data)
+        except ValueError:
+            print("\nI didn't understand what you entered. Try again!\n")
+            continue  # Loop again
+        if not selected_int in choice_dict.keys():
+            print(f"\nWrong number! choose between {list(choice_dict.keys())}...")
+        else:
+            output= {selected_int: choice_dict[selected_int]}
+            break
+
+    if selected_int == 0:
+        print(f"...Exited")
+
+    return output
+
+
+def build_base_and_pickle(MARKET: str) -> pd.DataFrame:
+
+    # Start the timer
+    program_timer = Timer(f"{MARKET} base building")
+    program_timer.start()
+
+    df = prepare_to_sow(MARKET, 
+            build_from_scratch=True,
+            save_sow=True)
+    
+    program_timer.stop()
+
+    return df
+
+def get_sows_from_pickles(MARKET: str) -> pd.DataFrame:
+
+    df = prepare_to_sow(MARKET, 
+            build_from_scratch=False,
+            save_sow=False)
+
+    return df
+
+def build_base_without_pickling(MARKET: str) -> pd.DataFrame:
+
+    # Start the timer
+    program_timer = Timer(f"Getting {MARKET} sows from pickles")
+    program_timer.start()
+
+    df = prepare_to_sow(MARKET, 
+            build_from_scratch=True,
+            save_sow=False)
+    
+    program_timer.stop()
+
+    return df
+
+
 def delete_files(file_list: list):
     """Delete files with paths as a string"""
 
@@ -115,8 +192,6 @@ def delete_all_pickles(MARKET: str):
 
     return None
 
-# Usage example
-folder_path = "/path/to/folder"
 
 def get_prec(v, base):
     """Gives the precision value
@@ -305,8 +380,11 @@ def pickle_with_age_check(obj: dict,
     existing_file_age = get_file_age(file_name_with_path)
     
     seconds_in_a_day = 24*60*60
-    file_age_in_days = existing_file_age.td.total_seconds() / seconds_in_a_day
-
+    if existing_file_age:
+        file_age_in_days = existing_file_age.td.total_seconds() / seconds_in_a_day
+    else:
+        file_age_in_days = 0
+        
     if existing_file_age is None: # No file exists
         to_pickle = True
     elif file_age_in_days >= minimum_age_in_days:
@@ -479,7 +557,7 @@ async def combine_a_chain_with_stdev(ib: IB, contract, MARKET: str, sleep: float
     """makes a dataframe from chain and stdev for a symbol"""
 
     price_iv = await get_price_iv(ib, contract, sleep)
-    symbol, undPrice, iv = price_iv
+    _, undPrice, iv = price_iv
 
     chain = await get_an_option_chain(ib, contract, MARKET)
     
@@ -559,14 +637,37 @@ def make_target_option_contracts(df_target: list, MARKET: str):
     return option_contracts
 
 
-def target_options_with_adjusted_sdev(df_chains: pd.DataFrame, 
+def sdev_for_dte(dte: float, DTESTDEVLOW: float, DTESTDEVHI: float, r: float=0.1):
+    """
+    Calculates the standard deviation (sdev) for a given dte value using the provided parameters.
+
+    Args:
+        dte: The time value (days to end) for which to calculate the sdev.
+        r: The decay rate (default: 0.1).
+        DTESTDEVLOW: The lower limit of the sdev range (default: 0.5).
+        DTESTDEVHI: The upper limit of the sdev range (default: 1.7).
+
+    Returns:
+        The calculated standard deviation value.
+    """
+
+    y_range = DTESTDEVHI - DTESTDEVLOW
+    return DTESTDEVLOW + y_range * np.exp(-r * dte)
+
+
+def target_options_with_adjusted_sdev(df_chains: pd.DataFrame,
                                       STDMULT: float,
-                                      how_many: int) -> pd.DataFrame:
+                                      how_many: int,
+                                      DTESTDEVLOW: float, 
+                                      DTESTDEVHI: float) -> pd.DataFrame:
     
     """Adjust the standard deviation to DTE, penalizes DTES closer to zero"""
 
     # Get the extra SD adjusted to DTE
-    xtra_sd = 1-(df_chains.dte/100)
+    # xtra_sd = 1-(df_chains.dte/100)
+    xtra_sd = df_chains.dte.apply(lambda dte: sdev_for_dte(dte, 
+                                                           DTESTDEVLOW=DTESTDEVLOW, 
+                                                           DTESTDEVHI=DTESTDEVHI))
 
     # Build the series for revised SD
     sd_revised = STDMULT + xtra_sd if STDMULT > 0 else STDMULT - xtra_sd
@@ -594,13 +695,19 @@ async def make_qualified_opts(port:int,
                     MARKET: str,
                     STDMULT: int,
                     how_many: int,
+                    DTESTDEVLOW: float,
+                    DTESTDEVHI: float,
                     CID: int=0,
                     desc: str='Qualifying Options'
                     ) -> pd.DataFrame:
     
     """Make naked puts from chains, based on PUTSTDMULT"""
 
-    df_ch2 = target_options_with_adjusted_sdev(df_chains, STDMULT, how_many)
+    df_ch2 = target_options_with_adjusted_sdev(df_chains = df_chains, 
+                                               STDMULT = STDMULT,
+                                               DTESTDEVLOW = DTESTDEVLOW,
+                                               DTESTDEVHI = DTESTDEVHI,
+                                               how_many = how_many)
 
     df_target = df_ch2[['symbol', 'strike', 'expiry', 'right',]].reset_index()
 
@@ -1077,7 +1184,6 @@ async def assemble_snp_underlyings(port: int) -> dict:
     return underlying_contracts
 
 
-
 def build_base(market: str, 
                puts_only: bool = True) -> pd.DataFrame:
     """Freshly build the base and pickle"""
@@ -1090,13 +1196,8 @@ def build_base(market: str,
     CALLSTDMULT = _vars.CALLSTDMULT
     PUTSTDMULT = _vars.PUTSTDMULT
 
-    # Start the timer
-    program_timer = Timer(f"{MARKET} base building")
-    program_timer.start()
-
-    # # needed only for this function!
-    # from nse import assemble_nse_underlyings, make_nse_lots
-    # from snp import assemble_snp_underlyings
+    DTESTDEVLOW = _vars.DTESTDEVLOW
+    DTESTDEVHI = _vars.DTESTDEVHI
 
     # Set paths for nse pickles
     unds_path = ROOT / 'data' / MARKET / 'unds.pkl'
@@ -1145,14 +1246,18 @@ def build_base(market: str,
                             df_chains, 
                             MARKET=MARKET,
                             STDMULT=PUTSTDMULT,
-                            how_many=-1, desc='Qualifying Puts'))     
+                            DTESTDEVLOW = DTESTDEVLOW,
+                            DTESTDEVHI = DTESTDEVHI,
+                            how_many=-1, desc='Qualifying {MARKET} Puts'))     
     pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
 
     df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
-                        df_chains, 
-                        MARKET=MARKET,
-                        STDMULT=CALLSTDMULT,
-                        how_many=1, desc="Qualifying Calls"))     
+                            df_chains, 
+                            MARKET=MARKET,
+                            STDMULT=CALLSTDMULT,
+                            DTESTDEVLOW = DTESTDEVLOW,
+                            DTESTDEVHI = DTESTDEVHI,
+                            how_many=1, desc="Qualifying {MARKET} Calls"))     
     pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
 
     if puts_only:
@@ -1184,8 +1289,6 @@ def build_base(market: str,
     # Get alll the options
     df_naked_targets = create_target_opts(market=MARKET)
     pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
-
-    program_timer.stop()
 
     return df_naked_targets
 
@@ -1222,7 +1325,8 @@ async def get_open_orders(ib) -> pd.DataFrame:
 
 
 def prepare_to_sow(market: str, 
-                   build_from_scratch: bool=False) -> pd.DataFrame():
+                   build_from_scratch: bool=False,
+                   save_sow: bool=True) -> pd.DataFrame():
     """Prepares the naked sow dataframe"""
 
     MARKET = market.upper()
@@ -1232,6 +1336,14 @@ def prepare_to_sow(market: str,
     puts_only = True if MARKET == 'SNP' else False
 
     if build_from_scratch:
+
+        # delete logs
+        files = [ROOT/'log'/ f'{MARKET.lower()}_app.log',
+                 ROOT/'log'/ f'{MARKET.lower()}_ib.log']
+        delete_files(file_list=files)
+
+        delete_all_pickles(MARKET)
+
         build_base(market=MARKET, 
                         puts_only=puts_only)
 
@@ -1244,7 +1356,8 @@ def prepare_to_sow(market: str,
     if isinstance(df_pf, pd.DataFrame):
         df = df[~df.symbol.isin(set(df_pf.symbol))]      
 
-    if ~df_openords.empty:  # There are some open orders
+    # Remove open orders
+    if ~df_openords.empty:
         df = df[~df.symbol.isin(set(df_openords.symbol))]
 
     # Keep options with margin and expected price only
@@ -1254,6 +1367,11 @@ def prepare_to_sow(market: str,
     cleaned = margins_only & with_expPrice
 
     df = df[cleaned]
+
+    if save_sow:
+        DATAPATH = ROOT / 'data' / MARKET
+        SOW_PATH = DATAPATH / 'df_sow.pkl'
+        pickle_me(df, SOW_PATH)
 
     return df
 
@@ -1315,160 +1433,6 @@ async def get_order_pf(PORT):
 
         return df_openords, df_pf
 
-
-
-# !!! TEMPORARY PREPARE TO SOW
-def prepare_to_sow_temp(market: str, 
-                   build_from_scratch: bool=False) -> pd.DataFrame():
-    """Prepares the naked sow dataframe"""
-
-    MARKET = market.upper()
-    _vars = Vars(MARKET)
-    PORT = _vars.PORT
-
-    puts_only = True if MARKET == 'SNP' else False
-
-    if build_from_scratch:
-        build_base_temp(market=MARKET, 
-                        puts_only=puts_only)
-
-    df = create_target_opts(market=MARKET)
-
-    # Get the portfolio and open orders        
-    df_openords, df_pf = asyncio.run(get_order_pf(PORT))    
-
-    # Remove targets which are already in the portfolio
-    if isinstance(df_pf, pd.DataFrame):
-        df = df[~df.symbol.isin(set(df_pf.symbol))]      
-
-    if ~df_openords.empty:  # There are some open orders
-        df = df[~df.symbol.isin(set(df_openords.symbol))]
-
-    # Keep options with margin and expected price only
-    margins_only = ~df.margin.isnull()
-    with_expPrice = ~df.expPrice.isnull()
-
-    cleaned = margins_only & with_expPrice
-
-    df = df[cleaned]
-
-    return df
-
-
-
-# !!! build_base temporary
-def build_base_temp(market: str, 
-               puts_only: bool = True) -> pd.DataFrame:
-    """Freshly build the base and pickle"""
-
-
-    # needed only for this function!
-    # from nse import assemble_nse_underlyings, make_nse_lots
-    # from snp import assemble_snp_underlyings
-
-    # Set variables
-    MARKET = market.upper()
-    _vars = Vars(MARKET)
-    PORT = _vars.PORT
-
-    CALLSTDMULT = _vars.CALLSTDMULT
-    PUTSTDMULT = _vars.PUTSTDMULT
-
-    # Start the timer
-    program_timer = Timer(f"{MARKET} base building")
-    program_timer.start()
-
-    # Set paths for nse pickles
-    unds_path = ROOT / 'data' / MARKET / 'unds.pkl'
-    chains_path = ROOT / 'data' / MARKET / 'df_chains.pkl'
-    lots_path = ROOT / 'data' / MARKET / 'lots.pkl'
-
-    qualified_puts_path = ROOT / 'data' / MARKET / 'df_qualified_puts.pkl'
-    qualified_calls_path = ROOT / 'data' / MARKET / 'df_qualified_calls.pkl'
-
-    opt_prices_path = ROOT / 'data' / MARKET / 'df_opt_prices.pkl'
-    opt_margins_path = ROOT / 'data' / MARKET / 'df_opt_margins.pkl'
-
-    naked_targets_path = ROOT / 'data' / MARKET / 'df_naked_targets.pkl'
-
-    # # Delete log files
-    # log_folder_path = ROOT / 'log' / str(MARKET.lower()+"*.log")
-    # file_pattern = glob.glob(str(log_folder_path))
-
-    # delete_files(file_pattern)
-
-    # Set the logger with logpath
-    IBI_LOGPATH = ROOT / 'log' / f'{MARKET.lower()}_ib.log'
-    LOGURU_PATH = ROOT / 'log' / f'{MARKET.lower()}_app.log'
-
-    util.logToFile(IBI_LOGPATH, level=logging.ERROR)
-    logger.add(LOGURU_PATH, rotation='10 MB', compression='zip', mode='w')
-
-    # Assemble underlyings
-    # if MARKET == 'SNP':
-    #     unds = asyncio.run(assemble_snp_underlyings(PORT))
-    # else:
-    #     unds = asyncio.run(assemble_nse_underlyings(PORT))
-    unds = {k: v for k, v in get_pickle(unds_path).items() if k in ['MMM']}
-
-    # # pickle underlyings
-    # pickle_with_age_check(unds, unds_path, 0)
-
-    # Make chains for underlyings and limit the dtes
-    df_chains = asyncio.run(make_chains(port=PORT,
-                                        MARKET=MARKET, 
-                                        contracts=list(unds.values())))
-    df_chains = df_chains[df_chains.dte <= _vars.MAXDTE].reset_index(drop=True)
-    # pickle_with_age_check(df_chains, chains_path, 0)
-
-    # Qualified put and options generated from the chains
-    df_qualified_puts = asyncio.run(make_qualified_opts(PORT, 
-                            df_chains, 
-                            MARKET=MARKET,
-                            STDMULT=PUTSTDMULT,
-                            how_many=-1, desc='Qualifying Puts'))     
-    # pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
-
-    df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
-                        df_chains, 
-                        MARKET=MARKET,
-                        STDMULT=CALLSTDMULT,
-                        how_many=1, desc="Qualifying Calls"))     
-    # pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
-
-    if puts_only:
-        df_all_qualified_options = df_qualified_puts
-    else:
-        df_all_qualified_options = pd.concat([df_qualified_calls, 
-                                            df_qualified_puts], 
-                                            ignore_index=True)
-
-    # Get the option prices
-    df_opt_prices = asyncio.run(get_opt_price_ivs(PORT, df_all_qualified_options))
-    # pickle_with_age_check(df_opt_prices, opt_prices_path, 0)
-
-    # Get the lots for nse
-    if MARKET == 'NSE':
-        lots = make_nse_lots()        
-        # pickle_with_age_check(lots, lots_path, 0)
-
-    # Get the option margins
-    if MARKET == 'NSE':
-        df_opt_margins = asyncio.run(get_margins(PORT, 
-                                                    df_all_qualified_options, 
-                                                    lots_path))
-    else: # no need for lots_path
-        df_opt_margins = asyncio.run(get_margins(PORT, 
-                                                    df_all_qualified_options))
-    # pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
-
-    # Get alll the options
-    df_naked_targets = create_target_opts(market=MARKET)
-    # pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
-
-    program_timer.stop()
-
-    return df_naked_targets
 
 if __name__ == "__main__":
 

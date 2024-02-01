@@ -1,7 +1,4 @@
-from loguru import logger
 from collections.abc import Iterable
-
-
 def make_name(obj) -> str:
     """
     Builds name for option objects.

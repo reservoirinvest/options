@@ -126,37 +126,40 @@ def make_a_choice(choice_list: list,
     return output
 
 
-def build_base_and_pickle(MARKET: str) -> pd.DataFrame:
+def build_base_and_pickle(MARKET: str, PAPER: bool) -> pd.DataFrame:
 
     # Start the timer
     program_timer = Timer(f"{MARKET} base building")
     program_timer.start()
 
-    df = prepare_to_sow(MARKET, 
-            build_from_scratch=True,
-            save_sow=True)
+    df = prepare_to_sow(MARKET,
+                        PAPER,
+                        build_from_scratch=True,
+                        save_sow=True)
     
     program_timer.stop()
 
     return df
 
-def get_sows_from_pickles(MARKET: str) -> pd.DataFrame:
+def get_sows_from_pickles(MARKET: str, PAPER: bool) -> pd.DataFrame:
 
     df = prepare_to_sow(MARKET, 
-            build_from_scratch=False,
-            save_sow=False)
+                        PAPER,
+                        build_from_scratch=False,
+                        save_sow=False)
 
     return df
 
-def build_base_without_pickling(MARKET: str) -> pd.DataFrame:
+def build_base_without_pickling(MARKET: str, PAPER: bool) -> pd.DataFrame:
 
     # Start the timer
     program_timer = Timer(f"Getting {MARKET} sows from pickles")
     program_timer.start()
 
-    df = prepare_to_sow(MARKET, 
-            build_from_scratch=True,
-            save_sow=False)
+    df = prepare_to_sow(MARKET,
+                        PAPER,
+                        build_from_scratch=True,
+                        save_sow=False)
     
     program_timer.stop()
 
@@ -243,6 +246,25 @@ def split_time_difference(diff: datetime.timedelta):
     output = Timediff(*(diff, days, hours, minutes, seconds))
 
     return output
+
+
+def clean_ib_util_df(contracts: list) -> pd.DataFrame:
+
+    """Cleans ib_insync's util.df to keep only relevant columns"""
+    
+    df1 = util.df(contracts)
+    df1.rename({"lastTradeDateOrContractMonth": "expiry"},
+                                    axis="columns",
+                                    inplace=True)
+
+    df1 = df1.assign(expiry = pd.to_datetime(df1.expiry))
+    cols = list(df1.columns[:6])
+    cols.append('multiplier')
+    df2 = df1[cols]
+    df2 = df2.assign(contract=contracts)
+
+    return df2
+
 
 def get_closest_values(myArr: list, 
                        myNumber: float, 
@@ -355,6 +377,19 @@ async def qualify_me(ib: IB,
     result = [r for t in tasks for r in t.result()]
 
     return result
+
+
+async def qualify_conIds(PORT: int, 
+                         conIds: list,
+                         desc: str = "Qualifying conIds"):
+    """Makes and qualifies contracts from conId list"""
+    
+    contracts = [Contract(conId=conId) for conId in conIds]
+
+    with await IB().connectAsync(port=PORT) as ib:
+        qualified_opts = await qualify_me(ib, contracts, desc=desc)
+
+    return qualified_opts
 
 
 def make_dict_of_qualified_contracts(qualified_contracts: list) -> dict:
@@ -472,7 +507,9 @@ def chain_to_df(chain, contract:Contract, MARKET: str) -> pd.DataFrame:
     # remove dtes <=0 from chains
     df4 = df3[df3.dte > 0]
 
-    return df4
+    df_out = df4.assign(multiplier = contract.multiplier)
+
+    return df_out
 
 
 async def get_market_data(ib: IB, 
@@ -561,7 +598,7 @@ async def combine_a_chain_with_stdev(ib: IB, contract, MARKET: str, sleep: float
 
     chain = await get_an_option_chain(ib, contract, MARKET)
     
-    df = chain.assign(localSymbol=contract.localSymbol, undPrice=undPrice, iv=iv)
+    df = chain.assign(localSymbol=contract.localSymbol, undPrice=undPrice, iv=iv, multiplier=contract.multiplier)
     df = df.assign(sigma=df[['iv', 'undPrice', 'dte']].\
                     apply(lambda x: get_a_stdev(x.iv, x.undPrice, x.dte), axis=1))
 
@@ -610,6 +647,14 @@ async def make_chains(port: int,
 
         df_chains = pd.concat(dfs, ignore_index=True)
 
+        # Add multiplier
+        if MARKET == 'SNP':
+            MULTIPLIER = 100
+        else:
+            MULTIPLIER = 1
+
+        df_chains = df_chains.assign(multiplier = MULTIPLIER)
+        
     return df_chains
 
 
@@ -637,9 +682,9 @@ def make_target_option_contracts(df_target: list, MARKET: str):
     return option_contracts
 
 
-def sdev_for_dte(dte: float, DTESTDEVLOW: float, DTESTDEVHI: float, r: float=0.1):
+def sdev_for_dte(dte: float, DTESTDEVLOW: float, DTESTDEVHI: float, DECAYRATE: float=0.1):
     """
-    Calculates the standard deviation (sdev) for a given dte value using the provided parameters.
+    Calculates the standard deviation (sdev) for a given dte from a curve.
 
     Args:
         dte: The time value (days to end) for which to calculate the sdev.
@@ -652,14 +697,15 @@ def sdev_for_dte(dte: float, DTESTDEVLOW: float, DTESTDEVHI: float, r: float=0.1
     """
 
     y_range = DTESTDEVHI - DTESTDEVLOW
-    return DTESTDEVLOW + y_range * np.exp(-r * dte)
+    return DTESTDEVLOW + y_range * np.exp(-DECAYRATE * dte)
 
 
 def target_options_with_adjusted_sdev(df_chains: pd.DataFrame,
                                       STDMULT: float,
                                       how_many: int,
                                       DTESTDEVLOW: float, 
-                                      DTESTDEVHI: float) -> pd.DataFrame:
+                                      DTESTDEVHI: float,
+                                      DECAYRATE: float) -> pd.DataFrame:
     
     """Adjust the standard deviation to DTE, penalizes DTES closer to zero"""
 
@@ -667,7 +713,8 @@ def target_options_with_adjusted_sdev(df_chains: pd.DataFrame,
     # xtra_sd = 1-(df_chains.dte/100)
     xtra_sd = df_chains.dte.apply(lambda dte: sdev_for_dte(dte, 
                                                            DTESTDEVLOW=DTESTDEVLOW, 
-                                                           DTESTDEVHI=DTESTDEVHI))
+                                                           DTESTDEVHI=DTESTDEVHI,
+                                                           DECAYRATE=DECAYRATE))
 
     # Build the series for revised SD
     sd_revised = STDMULT + xtra_sd if STDMULT > 0 else STDMULT - xtra_sd
@@ -697,6 +744,7 @@ async def make_qualified_opts(port:int,
                     how_many: int,
                     DTESTDEVLOW: float,
                     DTESTDEVHI: float,
+                    DECAYRATE:float,
                     CID: int=0,
                     desc: str='Qualifying Options'
                     ) -> pd.DataFrame:
@@ -707,6 +755,7 @@ async def make_qualified_opts(port:int,
                                                STDMULT = STDMULT,
                                                DTESTDEVLOW = DTESTDEVLOW,
                                                DTESTDEVHI = DTESTDEVHI,
+                                               DECAYRATE=DECAYRATE,
                                                how_many = how_many)
 
     df_target = df_ch2[['symbol', 'strike', 'expiry', 'right',]].reset_index()
@@ -835,7 +884,8 @@ def clean_a_margin(wif, conId):
 
 async def get_a_margin(ib: IB, 
                        contract,
-                       lot_path: Path=None):
+                       lot_path: Path=None,
+                       ACTION: str='SELL'):
     
     """Gets a margin"""
     lot_size = 1 # Default for SNP
@@ -843,7 +893,7 @@ async def get_a_margin(ib: IB,
     if lot_path: # For NSE
         lot_size = get_pickle(lot_path).get(contract.symbol, None)
 
-    order = MarketOrder('SELL', lot_size)
+    order = MarketOrder(ACTION, lot_size)
 
     def onError(reqId, errorCode, errorString, contract):
         logger.error(f"{contract.localSymbol} with reqId: {reqId} has errorCode: {errorCode} error: {errorString}")
@@ -868,7 +918,8 @@ async def get_a_margin(ib: IB,
 
 async def get_margins(port: int, 
                       df_nakeds: pd.DataFrame, 
-                      lot_path: Path=None, 
+                      lot_path: Path=None,
+                      ACTION: str='SELL', 
                       chunk_size: int=100,
                       CID: int=0):
 
@@ -932,10 +983,7 @@ def create_target_opts(market: str) -> pd.DataFrame:
 
     # Get precise expected prices
     xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
-            df_naked_targets.comm)/df_naked_targets.lot_size
-
-    if MARKET == 'SNP':
-        xp = xp/100 # correction for lot_size
+            df_naked_targets.comm)/df_naked_targets.lot_size/df_naked_targets.multiplier
 
     # Set the minimum option selling price
     xp[xp < MINOPTSELLPRICE] = MINOPTSELLPRICE
@@ -958,14 +1006,14 @@ def create_target_opts(market: str) -> pd.DataFrame:
     new_opt_price = df[opt_price_needs_bump].expPrice + PREC
     df.loc[opt_price_needs_bump, 'expPrice'] = new_opt_price
 
-    # for SNP lot_size should be multiple of 100 for correct rom
-    rom=df.expPrice*df.lot_size/df.margin*365/df.dte
-
-    if MARKET == 'SNP':
-        rom = rom * 100
+    # re-establish the rom after bump
+    rom=(df.expPrice*df.lot_size*df.multiplier-df.comm)/df.margin*365/df.dte
 
     df = df.assign(prop = df.sdev.apply(get_prob),
-                   rom=rom)
+                    rom=rom)    
+
+    # weed out ROMs not upto expectations
+    df = df[df.rom >= _vars.MINEXPROM]
 
     return df
 
@@ -1162,10 +1210,9 @@ def make_unqualified_snp_underlyings(df: pd.DataFrame) -> pd.DataFrame:
     return df
     
 
-async def assemble_snp_underlyings(port: int) -> dict:
+async def assemble_snp_underlyings(PORT: int) -> dict:
     """Assembles a dictionary of SNP underlying contracts"""
 
-    PORT = Vars('SNP').PORT
     CID = Vars('SNP').CID
 
     indexes_path = ROOT / 'data' / 'master' / 'snp_indexes.yml'
@@ -1184,20 +1231,26 @@ async def assemble_snp_underlyings(port: int) -> dict:
     return underlying_contracts
 
 
-def build_base(market: str, 
+def build_base(market: str,
+               PAPER: bool,
                puts_only: bool = True) -> pd.DataFrame:
     """Freshly build the base and pickle"""
 
     # Set variables
     MARKET = market.upper()
     _vars = Vars(MARKET)
-    PORT = _vars.PORT
+
+    if PAPER:
+        PORT = _vars.PAPER
+    else:
+        PORT = _vars.PORT
 
     CALLSTDMULT = _vars.CALLSTDMULT
     PUTSTDMULT = _vars.PUTSTDMULT
 
     DTESTDEVLOW = _vars.DTESTDEVLOW
     DTESTDEVHI = _vars.DTESTDEVHI
+    DECAYRATE = _vars.DECAYRATE
 
     # Set paths for nse pickles
     unds_path = ROOT / 'data' / MARKET / 'unds.pkl'
@@ -1248,7 +1301,8 @@ def build_base(market: str,
                             STDMULT=PUTSTDMULT,
                             DTESTDEVLOW = DTESTDEVLOW,
                             DTESTDEVHI = DTESTDEVHI,
-                            how_many=-1, desc='Qualifying {MARKET} Puts'))     
+                            DECAYRATE=DECAYRATE,
+                            how_many=-1, desc=f'Qualifying {MARKET} Puts'))     
     pickle_with_age_check(df_qualified_puts, qualified_puts_path, 0)
 
     df_qualified_calls = asyncio.run(make_qualified_opts(PORT, 
@@ -1257,7 +1311,8 @@ def build_base(market: str,
                             STDMULT=CALLSTDMULT,
                             DTESTDEVLOW = DTESTDEVLOW,
                             DTESTDEVHI = DTESTDEVHI,
-                            how_many=1, desc="Qualifying {MARKET} Calls"))     
+                            DECAYRATE=DECAYRATE,
+                            how_many=1, desc=f"Qualifying {MARKET} Calls"))     
     pickle_with_age_check(df_qualified_calls, qualified_calls_path, 0)
 
     if puts_only:
@@ -1324,7 +1379,8 @@ async def get_open_orders(ib) -> pd.DataFrame:
     return df_openords
 
 
-def prepare_to_sow(market: str, 
+def prepare_to_sow(market: str,
+                   PAPER: bool=False,
                    build_from_scratch: bool=False,
                    save_sow: bool=True) -> pd.DataFrame():
     """Prepares the naked sow dataframe"""
@@ -1332,6 +1388,9 @@ def prepare_to_sow(market: str,
     MARKET = market.upper()
     _vars = Vars(MARKET)
     PORT = _vars.PORT
+
+    if PAPER:
+        PORT = _vars.PAPER
 
     puts_only = True if MARKET == 'SNP' else False
 
@@ -1344,8 +1403,9 @@ def prepare_to_sow(market: str,
 
         delete_all_pickles(MARKET)
 
-        build_base(market=MARKET, 
-                        puts_only=puts_only)
+        build_base(market=MARKET,
+                   PAPER=PAPER,
+                   puts_only=puts_only)
 
     df = create_target_opts(market=MARKET)
 
@@ -1367,6 +1427,11 @@ def prepare_to_sow(market: str,
     cleaned = margins_only & with_expPrice
 
     df = df[cleaned]
+
+    # Sort with most likely ones on top
+    df = df.loc[(df.expPrice/df.optPrice)\
+                   .sort_values().index]\
+                    .reset_index(drop=True)
 
     if save_sow:
         DATAPATH = ROOT / 'data' / MARKET
@@ -1435,9 +1500,10 @@ async def get_order_pf(PORT):
 
 
 if __name__ == "__main__":
+    pass
 
-    MARKET = 'NSE'
+    # MARKET = 'NSE'
     
-    df = prepare_to_sow(MARKET, 
-                        build_from_scratch=True)
-    print(df)
+    # df = prepare_to_sow(MARKET, 
+    #                     build_from_scratch=True)
+    # print(df)

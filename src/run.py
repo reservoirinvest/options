@@ -11,12 +11,26 @@ if __name__ == "__main__":
     # ===============
 
     msg_header = "Choose a number for MARKET:\n"
-    choice_list = {"NSE", "SNP"}
+    choice_list = ["NSE", "SNP"]
 
     market_choice = make_a_choice(choice_list, msg_header)
     selection = next(iter(market_choice.keys()))
     MARKET = next(iter(market_choice.values()))
 
+    # PAPER OR LIVE
+    # =============
+    msg_header = "Do you want to go with LIVE or PAPER trades ? :\n"
+    choice_list = ["LIVE", "PAPER"]
+
+    port_choice = make_a_choice(choice_list, msg_header)
+    selection = next(iter(port_choice.keys()))
+
+    port = next(iter(port_choice.values()))
+    
+    if port == "PAPER":
+        PAPER = True
+    else:
+        PAPER = False
 
     # CHOOSE AN ACTION
     # ================
@@ -32,13 +46,13 @@ if __name__ == "__main__":
     match my_choice:
 
         case 1:
-            df = build_base_and_pickle(MARKET)   
+            df = build_base_and_pickle(MARKET, PAPER)   
 
         case 2:
-            df = get_sows_from_pickles(MARKET)
+            df = get_sows_from_pickles(MARKET, PAPER)
             
         case 3: # Build base but DON'T SAVE PICKLES
-            df = build_base_without_pickling(MARKET)
+            df = build_base_without_pickling(MARKET, PAPER)
 
         case _: # Unknown case
             print(f"Unknown choice...\n")

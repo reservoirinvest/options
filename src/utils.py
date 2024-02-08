@@ -769,7 +769,7 @@ async def make_qualified_opts(port:int,
     # generate target puts
     df_puts = util.df(options).iloc[:, 2:6].\
         rename(columns={"lastTradeDateOrContractMonth": "expiry"}).\
-            assign(qualified_opts=options)
+            assign(contract=options)
     
     cols = df_puts.columns[:-1].to_list()
 
@@ -815,11 +815,16 @@ async def get_opt_prices(ib:IB,
 
 
 async def get_opt_price_ivs(port: int, 
-                            df_qualified_opts: pd.DataFrame,
+                            qualified_opts: Union[pd.DataFrame, list],
+                            HIGHEST: bool = True,
                             CID: int=0) -> pd.DataFrame:
     """gets option prices and IVs"""
 
-    opt_contracts = df_qualified_opts.qualified_opts.to_list()
+    try:
+        opt_contracts = qualified_opts.contract.to_list()
+    except AttributeError:
+        qualified_opts = clean_ib_util_df(qualified_opts)
+        opt_contracts = qualified_opts.contract.to_list()
 
     with await IB().connectAsync(port=port, clientId=CID) as ib:
 
@@ -830,9 +835,9 @@ async def get_opt_price_ivs(port: int,
     'volume', 'high', 'low', 'bid', 'ask', 'last', 'close']
 
     df_opts = df_opt_prices[opt_cols]
-    duplicated_columns = [col for col in df_qualified_opts.columns if col in df_opts.columns]
+    duplicated_columns = [col for col in qualified_opts.columns if col in df_opts.columns]
 
-    df = df_qualified_opts.join(df_opts.drop(duplicated_columns, axis=1))
+    df = qualified_opts.join(df_opts.drop(duplicated_columns, axis=1))
 
     greek_cols = [ 'undPrice', 'impliedVol', 'delta', 'gamma',
     'vega', 'theta', 'optPrice']
@@ -850,8 +855,52 @@ async def get_opt_price_ivs(port: int,
                         join(bid_df, lsuffix='Bid')
     
     # puts optPrice column, if not in df
-    if not 'optPrice' in list(df):
-        df = df.assign(optPrice = df[['bid', 'ask', 'last', 'close']].max(axis=1))
+    df = recompute_opt_price(df, HIGHEST)
+
+    return df
+
+
+def recompute_opt_price(df: pd.DataFrame, 
+                        HIGHEST: bool,
+                        *args) -> pd.DataFrame:
+    
+    """
+    Used to compute min or max of option prices provided.
+
+    Arguments:
+    --
+    df: Input datframe. Should contain fields specified in args
+    HIGHEST: True gives max values, else min values in OptPrice
+    *args: should contain float-type price columns. Else bid, ask, last, close defaulted.
+
+    Usage:
+    -- 
+    recompute_opt_price(df, True, 'bid', 'close') to get max of bid and close
+    """
+    if args:
+        price_cols = list(args)
+    else:
+        price_cols = ['bid', 'ask', 'last', 'close']
+    
+    # cols = list(df.columns[:6]) + price_cols
+
+    # remove -1 from price columns
+    # df_n = df[cols]
+    df_n1 = df[price_cols].replace(-1, np.nan)
+
+    # replace bid and ask with average
+    try:
+        df_n2 = df_n1.assign(avgPrice=(df_n1.ask - df_n1.bid)/2).drop(columns=['bid', 'ask'])
+    except AttributeError: # bid or ask is not present in the list
+        df_n2 = df_n1
+
+    if HIGHEST:
+        optPrice = df_n2.assign(optPrice = df_n2.max(axis=1)).optPrice
+    else:
+        optPrice = df_n2.assign(optPrice = df_n2.min(axis=1)).optPrice
+
+    # replace optPrice of df with cleansed optPrice
+    df = df.assign(optPrice = optPrice)
 
     return df
 
@@ -923,7 +972,7 @@ async def get_margins(port: int,
                       chunk_size: int=100,
                       CID: int=0):
 
-    opt_contracts = df_nakeds.qualified_opts.to_list()
+    opt_contracts = df_nakeds.contract.to_list()
 
     results = list()
 
@@ -1012,8 +1061,11 @@ def create_target_opts(market: str) -> pd.DataFrame:
     df = df.assign(prop = df.sdev.apply(get_prob),
                     rom=rom)    
 
-    # weed out ROMs not upto expectations
+    # weed out ROMs which are infinity or not upto expectations
     df = df[df.rom >= _vars.MINEXPROM]
+    df = df[df.rom != np.inf] # Eliminates `zero` margins
+
+    df = df.reset_index(drop=True)
 
     return df
 

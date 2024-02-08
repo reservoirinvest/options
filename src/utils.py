@@ -15,7 +15,7 @@ import pandas as pd
 import pytz
 import yaml
 from from_root import from_root
-from ib_insync import IB, Contract, MarketOrder, util, Index, Stock
+from ib_insync import IB, Contract, MarketOrder, util, Index, Stock, LimitOrder
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
 from scipy.integrate import quad
@@ -1382,7 +1382,8 @@ async def get_open_orders(ib) -> pd.DataFrame:
 def prepare_to_sow(market: str,
                    PAPER: bool=False,
                    build_from_scratch: bool=False,
-                   save_sow: bool=True) -> pd.DataFrame():
+                   save_sow: bool=True,
+                   cancel_all_open_ords: bool=False) -> pd.DataFrame():
     """Prepares the naked sow dataframe"""
 
     MARKET = market.upper()
@@ -1416,9 +1417,13 @@ def prepare_to_sow(market: str,
     if isinstance(df_pf, pd.DataFrame):
         df = df[~df.symbol.isin(set(df_pf.symbol))]      
 
-    # Remove open orders
+    # Remove open orders from df
     if ~df_openords.empty:
         df = df[~df.symbol.isin(set(df_openords.symbol))]
+
+    # Cancel open orders, if selected
+    if cancel_all_open_ords:
+        asyncio.run(cancel_all_api_orders(MARKET))
 
     # Keep options with margin and expected price only
     margins_only = ~df.margin.isnull()
@@ -1463,7 +1468,7 @@ def place_orders(ib: IB, cos: Union[Tuple, List], blk_size: int = 25) -> List:
             for c, o in b:
                 td = ib.placeOrder(c, o)
                 trades.append(td)
-            ib.sleep(0.75)
+            asyncio.sleep(0.75)
 
     return trades
 
@@ -1497,7 +1502,116 @@ async def get_order_pf(PORT):
         df_pf = quick_pf(ib)
 
         return df_openords, df_pf
+    
 
+async def cancel_all_api_orders(MARKET):
+
+    """
+    Cancels all API orders.
+    Does not cancel TWS direct orders.
+
+    PORT: TWS / IB port for cancellation
+    """
+
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+    ACTIVE_STATUS = _vars.ACTIVE_STATUS
+    blk_size = 25
+
+    cancelled_orders = []
+
+    with await IB().connectAsync(port=PORT) as ib:
+
+        # await ib.reqAllOpenOrdersAsync()
+
+        await ib.reqAllOpenOrdersAsync()
+
+        trades = ib.trades()
+        open_orders = [t.order for t in trades if t.orderStatus.status in ACTIVE_STATUS]
+
+        if open_orders:
+
+            cobs = [open_orders[i:i + blk_size] for i in range(0, len(open_orders), blk_size)]
+            for order_blk in tqdm(cobs):
+                for order in order_blk:
+                    cancelled_ord = ib.cancelOrder(order)
+                    cancelled_orders.append(cancelled_ord)
+                await asyncio.sleep(0.75)
+        
+        else:
+            logger.info("Nothing to cancel!")
+            cancelled_orders = None
+
+    return cancelled_orders
+
+
+#!!! TEMP FUNCTION START
+
+async def place_orders_async(MARKET:str, PAPER: bool, 
+                            cos:list, blk_size: int=25):
+
+    _vars = Vars(MARKET)
+
+    if PAPER:
+        PORT = _vars.PAPER
+    else:
+        PORT = _vars.PORT
+
+    with await IB().connectAsync(port=PORT) as ib:
+
+        trades = []
+
+        if isinstance(cos, (tuple, list)) and (len(cos) == 2):
+            c, o = cos
+            trades.append(ib.placeOrder(c, o))
+
+        else:
+            cobs = [cos[i:i + blk_size] for i in range(0, len(cos), blk_size)]
+
+            for b in tqdm(cobs):
+                for c, o in b:
+                    td = ib.placeOrder(c, o)
+                    trades.append(td)
+                await asyncio.sleep(0.75)
+
+        logger.info(f"Placed {len(trades)} orders!")
+
+    return trades
+
+
+    
+def sow_me(MARKET: str, 
+           PAPER: bool = False,
+           build_from_scratch: bool = False,
+           save_sow: bool = False):
+    """
+    Cancels existing open orders and sows afresh
+
+    Sows always will delete existing API open orders
+    """
+
+    ACTIVE_STATUS = Vars(MARKET).ACTIVE_STATUS 
+
+    df = prepare_to_sow(MARKET, 
+            build_from_scratch = build_from_scratch,
+            save_sow = save_sow,
+            cancel_all_open_ords=True)
+
+    # Make (contract, order) tuple
+    cos = [(contract , LimitOrder('Sell', qty, price))
+        for contract, qty, price in zip(df.contract, df.lot_size, df.expPrice)]
+
+    orders = asyncio.run(place_orders_async(MARKET=MARKET, 
+                               PAPER=PAPER, 
+                               cos=cos))
+    
+    success = [o for o in orders 
+               if o.orderStatus.status in ACTIVE_STATUS]
+    logger.info(f"Sowed {len(success)} orders!")
+
+    return success
+
+#!!! TEMP FUNCTION END
 
 if __name__ == "__main__":
     pass

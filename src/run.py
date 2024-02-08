@@ -1,9 +1,10 @@
 # run the chosen program
 
 import pandas as pd
+import asyncio
 
 from utils import (build_base_and_pickle, build_base_without_pickling,
-                   get_sows_from_pickles, make_a_choice)
+                   get_sows_from_pickles, make_a_choice, sow_me)
 
 if __name__ == "__main__":
 
@@ -35,9 +36,10 @@ if __name__ == "__main__":
     # CHOOSE AN ACTION
     # ================
 
-    action_choice_list = ["Sow with base from scratch and pickle",
-                          "Sow from pickle",
-                          "Build base from scratch but don't save pickles"]
+    action_choice_list = ["Cancel API open orders. Sow orders from scratch",
+                          "Sow orders from pickle. Cancel API open orders. Don't save sows",
+                          "Build sow df from pickle. Don't order",
+                          "Build sow df from scratch. Don't order or save pickles"]
 
     action_choice = make_a_choice(action_choice_list)
 
@@ -46,16 +48,19 @@ if __name__ == "__main__":
     match my_choice:
 
         case 1:
-            df = build_base_and_pickle(MARKET, PAPER)   
+            out = sow_me(MARKET=MARKET, build_from_scratch=True, save_sow=True)
 
         case 2:
-            df = get_sows_from_pickles(MARKET, PAPER)
+            out = sow_me(MARKET=MARKET, build_from_scratch=False, save_sow=False)
+
+        case 3:
+            out = get_sows_from_pickles(MARKET, PAPER)
             
-        case 3: # Build base but DON'T SAVE PICKLES
-            df = build_base_without_pickling(MARKET, PAPER)
+        case 4: # Build base but DON'T SAVE PICKLES
+            out = build_base_without_pickling(MARKET, PAPER)
 
         case _: # Unknown case
             print(f"Unknown choice...\n")
-            df = pd.DataFrame([])
+            out = pd.DataFrame([])
             
-    print(df)
+    print(out)

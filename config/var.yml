@@ -47,15 +47,15 @@ NSE:
   MINDTE: 0
   MAXDTE: 60
 
-  CALLSTDMULT: 1.3 # Min stdev multiple for calls
-  PUTSTDMULT: -1.3 # Min stdev multiple for puts
+  CALLSTDMULT: 1.33 # Min stdev multiple for calls
+  PUTSTDMULT: -1.2 # Min stdev multiple for puts
   DTESTDEVLOW: 0.05 # Upper limit of adjustment to stdev based on DTE
-  DTESTDEVHI: 0.4 # Lower limit of adjustment to stdev based on DTE
-  DECAYRATE: 0.1 # Decay rate of the sdev adjustment curve on DTE
+  DTESTDEVHI: 0.5 # Lower limit of adjustment to stdev based on DTE
+  DECAYRATE: 0.05 # Decay rate of the sdev adjustment curve on DTE
 
-  MINEXPROM: 1.25
+  MINEXPROM: 1.5
 
-  MINOPTSELLPRICE: 0.5
+  MINOPTSELLPRICE: 0.25
 
   BLACKLIST: # Ref: https://zerodha.com/margin-calculator/SPAN/
   - FINNIFTY
@@ -80,10 +80,10 @@ SNP:
   PUTSTDMULT: -1.4 #  Min stdev multiple for puts
   DTESTDEVLOW: 0.1 # Upper limit of adjustment to stdev based on DTE
   DTESTDEVHI: 1.2 # Lower limit of adjustment to stdev based on DTE
-  DECAYRATE: 0.1 # Decay rate of the sdev adjustment curve on DTE
+  DECAYRATE: 0.05 # Decay rate of the sdev adjustment curve on DTE
 
 
-  MINEXPROM: 1.25
+  MINEXPROM: 1.8
 
   MINOPTSELLPRICE: 0.5
   

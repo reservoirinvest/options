@@ -20,7 +20,7 @@ COMMON:
       'last', 'optPrice', 'expPrice', 'prop', 'rom']
 
   STATES:
-    unsowed: ["#fffaf0" , "No orders to sow. No existing position.", "white"]
+    unsowed: ["#fffaf0" , "Fresh. No orders sown. No existing position.", "white"]
     orphaned: ["#a9a9a9" , "A long call or put option (positive) position that doesn't have an underlying position.", "darkgray"]
     perfect: ["#0f9d58" , "Ticker position present that is both covered and protected [or] Option position that is with a reap order.", "green"]
         
@@ -53,7 +53,7 @@ NSE:
   DTESTDEVHI: 1 # Lower limit of adjustment to stdev based on DTE
   DECAYRATE: 0.05 # Decay rate of the sdev adjustment curve on DTE
 
-  MINEXPROM: 1.85
+  MINEXPROM: 1.4
 
   MINOPTSELLPRICE: 0.25
 
@@ -76,8 +76,8 @@ SNP:
   MINDTE: 0
   MAXDTE: 45
 
-  CALLSTDMULT: 1.5 # Min stdev multiple for calls
-  PUTSTDMULT: -1.4 #  Min stdev multiple for puts
+  CALLSTDMULT: 1.3 # Min stdev multiple for calls
+  PUTSTDMULT: -1.3 #  Min stdev multiple for puts
   DTESTDEVLOW: 0.1 # Upper limit of adjustment to stdev based on DTE
   DTESTDEVHI: 1.4 # Lower limit of adjustment to stdev based on DTE
   DECAYRATE: 0.05 # Decay rate of the sdev adjustment curve on DTE

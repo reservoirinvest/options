@@ -5,6 +5,7 @@ import pandas as pd
 import pickle
 from typing import Optional
 import datetime
+from ib_insync import Order
 
 def empty_the_df(df):
     """Empty the dataclass df"""
@@ -25,6 +26,7 @@ class OpenOrder:
     strike: float = 0.0
     right: str = "?" # Will be 'P' for Put, 'C' for Call
     orderId: int = 0
+    order: Order = None
     permId: int = 0
     action: str = "SELL"  # 'BUY' | 'SELL'
     totalQuantity: float = 0.0

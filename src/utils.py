@@ -15,11 +15,11 @@ import pandas as pd
 import pytz
 import yaml
 from from_root import from_root
-from ib_insync import IB, Contract, MarketOrder, util, Index, Stock, LimitOrder
+from ib_insync import IB, Contract, Index, LimitOrder, MarketOrder, Stock, util
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
 from scipy.integrate import quad
-from tqdm.asyncio import tqdm
+from tqdm.asyncio import tqdm, tqdm_asyncio
 
 # from data.master.dclass import OpenOrder
 from dclass import OpenOrder, Portfolio
@@ -86,6 +86,22 @@ class Vars:
             setattr(self, k.upper(), v)
 
 
+def to_list(data):
+    """Converts any iterable to a list, and non-iterables to a list with a single element.
+
+    Args:
+        data: The data to be converted.
+
+    Returns:
+        A list containing the elements of the iterable, or a list with the single element if the input is not iterable.
+    """
+
+    try:
+        return list(data)
+    except TypeError:
+        return [data]
+
+
 def make_a_choice(choice_list: list,
                   msg_header: str="Choose from the following:"):
 
@@ -149,6 +165,48 @@ def get_sows_from_pickles(MARKET: str, PAPER: bool) -> pd.DataFrame:
                         save_sow=False)
 
     return df
+
+
+def get_lots(contract, lots_path: Union[Path, None]=None):
+    """
+    Retrieves lots based on contract.
+
+    Args:
+        contract: ib_insync contract. could be Contract, Option, Stock or Index type.
+        lots_path: A dictionary from `lots.pkl` for retrieving values associated with symbols (if required).
+
+    Returns:
+        The lots. If no match found returns None.
+    """
+    if lots_path:
+        lots = get_pickle(lots_path) # lots dictionary from nse path
+
+    match (contract.secType, contract.exchange):
+        
+        case ('OPT', 'NSE'):
+
+            # Gets the lots of NSE options
+            if not lots_path:
+                logger.info(f"No lots_path provided for NSE: {contract.localSymbol}")
+                return None
+            else:
+                return lots.get(contract.symbol, None)
+        
+        case ('OPT', _):  # Any exchange other than 'NSE' for options
+            return 1
+        
+        case (_, 'NSE'):  # Any security type on the 'NSE' exchange other than options
+
+            if not lots_path:
+                logger.info(f"No lots_path provided for NSE: {contract.localSymbol}")
+                return None
+            else:
+                return lots.get(contract.symbol, None)
+        
+        case (_, _):  # Any other combination (non-options on non-'NSE' exchanges)
+
+            return 100
+        
 
 def build_base_without_pickling(MARKET: str, PAPER: bool) -> pd.DataFrame:
 
@@ -248,20 +306,47 @@ def split_time_difference(diff: datetime.timedelta):
     return output
 
 
-def clean_ib_util_df(contracts: list) -> pd.DataFrame:
+def clean_ib_util_df(contracts: Union[list, pd.Series]) -> pd.DataFrame:
 
     """Cleans ib_insync's util.df to keep only relevant columns"""
-    
-    df1 = util.df(contracts)
-    df1.rename({"lastTradeDateOrContractMonth": "expiry"},
-                                    axis="columns",
-                                    inplace=True)
 
-    df1 = df1.assign(expiry = pd.to_datetime(df1.expiry))
-    cols = list(df1.columns[:6])
-    cols.append('multiplier')
-    df2 = df1[cols]
-    df2 = df2.assign(contract=contracts)
+    # match contracts:
+    #     case list():
+    #         df1 = util.df(contracts)
+    #     case pd.Series():
+    #         df1 = util.df(list(contracts))
+    #     case _:
+    #         logger.error(f"cannot clean type: {type(contracts)}")
+    #         df1 = None
+
+    df1 = pd.DataFrame([]) # initialize 
+
+    if isinstance(contracts, list):
+        df1 = util.df(contracts)
+    elif isinstance(contracts, pd.Series): 
+        try:
+            contract_list = list(contracts)
+            df1 = util.df(contract_list) # it could be a series
+        except (AttributeError, ValueError):
+            logger.error(f"cannot clean type: {type(contracts)}")
+    else:
+        logger.error(f"cannot clean unknowntype: {type(contracts)}")
+        
+    if not df1.empty:
+    
+        df1.rename({"lastTradeDateOrContractMonth": "expiry"},
+                                        axis="columns",
+                                        inplace=True)
+
+        df1 = df1.assign(expiry = pd.to_datetime(df1.expiry))
+        cols = list(df1.columns[:6])
+        cols.append('multiplier')
+        df2 = df1[cols]
+        df2 = df2.assign(contract=contracts)
+    
+    else:
+        df2 = None
+    
 
     return df2
 
@@ -368,11 +453,11 @@ def get_dte(dt: Union[datetime.datetime, datetime.date, str],
 async def qualify_me(ib: IB, 
                      contracts: list,
                      desc: str = 'Qualifying contracts'):
-    """Qualify contracts asynchronously"""
+    """[async] Qualify contracts asynchronously"""
 
     tasks = [asyncio.create_task(ib.qualifyContractsAsync(c), name=c.localSymbol) for c in contracts]
 
-    await tqdm.gather(*tasks, desc=desc)
+    await tqdm_asyncio.gather(*tasks, desc=desc)
 
     result = [r for t in tasks for r in t.result()]
 
@@ -382,7 +467,7 @@ async def qualify_me(ib: IB,
 async def qualify_conIds(PORT: int, 
                          conIds: list,
                          desc: str = "Qualifying conIds"):
-    """Makes and qualifies contracts from conId list"""
+    """[async] Makes and qualifies contracts from conId list"""
     
     contracts = [Contract(conId=conId) for conId in conIds]
 
@@ -454,7 +539,7 @@ async def get_ohlc_bars(ib: IB,
                DURATION: int=365,
                BAR_SIZE = "1 day",
                ) -> list:
-    """Get Historical OHLC bars from IB"""
+    """[async] Get Historical OHLC bars from IB"""
 
     DUR = str(DURATION) + " D"
     
@@ -471,7 +556,7 @@ async def get_ohlc_bars(ib: IB,
     return ohlc_bars
 
 async def get_an_option_chain(ib: IB, contract:Contract, MARKET: str):
-    """Get Option Chains from IB"""
+    """[async] Get Option Chains from IB"""
 
     chain = await ib.reqSecDefOptParamsAsync(
     underlyingSymbol=contract.symbol,
@@ -517,7 +602,7 @@ async def get_market_data(ib: IB,
                           sleep:float = 2):
 
     """
-    Get marketPrice including implied volatility\n   
+    [async] Get marketPrice including implied volatility\n   
     Pretty quick when market is closed
     """
     tick = ib.reqMktData(c, genericTickList="106")
@@ -532,7 +617,7 @@ async def get_tick_data(ib: IB,
                           delay: float=0):
 
     """
-    Gets tick-by-tick data\n  
+    [async] Gets tick-by-tick data\n  
     Quick when market is open \n   
     Takes ~6 secs after market hours. \n  
     No impliedVolatility"""
@@ -546,7 +631,7 @@ async def get_tick_data(ib: IB,
 
 async def get_price_iv(ib, contract, sleep: float=2) -> dict:
 
-    """Computes price and IV of a contract.
+    """[async] Computes price and IV of a contract.
 
     OUTPUT: dict{localsymbol, price, iv}
     
@@ -591,7 +676,7 @@ def get_a_stdev(iv: float, price: float, dte: float) -> float:
 
 
 async def combine_a_chain_with_stdev(ib: IB, contract, MARKET: str, sleep: float=3, ) -> pd.DataFrame:
-    """makes a dataframe from chain and stdev for a symbol"""
+    """[async] makes a dataframe from chain and stdev for a symbol"""
 
     price_iv = await get_price_iv(ib, contract, sleep)
     _, undPrice, iv = price_iv
@@ -627,7 +712,7 @@ async def make_chains(port: int,
                       sleep: float=7,
                       CID: int=0,
                       ) -> pd.DataFrame:
-    """Makes chains for a list of contracts. 2m 11s for 186 contracts.\n
+    """[async] Makes chains for a list of contracts. 2m 11s for 186 contracts.\n
     ...for optimal off-market, chunk-size of 25 and sleep of 7 seconds."""
 
     with await IB().connectAsync(port=port, clientId=CID) as ib:
@@ -749,7 +834,7 @@ async def make_qualified_opts(port:int,
                     desc: str='Qualifying Options'
                     ) -> pd.DataFrame:
     
-    """Make naked puts from chains, based on PUTSTDMULT"""
+    """[async] Make naked puts from chains, based on PUTSTDMULT"""
 
     df_ch2 = target_options_with_adjusted_sdev(df_chains = df_chains, 
                                                STDMULT = STDMULT,
@@ -785,7 +870,7 @@ async def make_qualified_opts(port:int,
 async def get_opt_prices(ib:IB,
                          opt_contracts: list, 
                          chunk_size: int=44):
-    """Gets option prices"""
+    """[async] Gets option prices"""
 
     results = []
 
@@ -818,7 +903,7 @@ async def get_opt_price_ivs(port: int,
                             qualified_opts: Union[pd.DataFrame, list],
                             HIGHEST: bool = True,
                             CID: int=0) -> pd.DataFrame:
-    """gets option prices and IVs"""
+    """[async] gets option prices and IVs"""
 
     try:
         opt_contracts = qualified_opts.contract.to_list()
@@ -933,16 +1018,20 @@ def clean_a_margin(wif, conId):
 
 async def get_a_margin(ib: IB, 
                        contract,
-                       lot_path: Path=None,
-                       ACTION: str='SELL'):
+                       order: Union[MarketOrder, None]=None,
+                       lots_path: Path=None,
+                       ACTION: str='SELL',
+                       ):
     
-    """Gets a margin"""
-    lot_size = 1 # Default for SNP
+    """[async] Gets a margin"""
 
-    if lot_path: # For NSE
-        lot_size = get_pickle(lot_path).get(contract.symbol, None)
+    if lots_path: # For NSE
+        lot_size = get_lots(contract, lots_path)
+    else:
+        lot_size = get_lots(contract)
 
-    order = MarketOrder(ACTION, lot_size)
+    if not order: # Uses ACTION instead of order
+        order = MarketOrder(ACTION, lot_size)
 
     def onError(reqId, errorCode, errorString, contract):
         logger.error(f"{contract.localSymbol} with reqId: {reqId} has errorCode: {errorCode} error: {errorString}")
@@ -966,15 +1055,24 @@ async def get_a_margin(ib: IB,
 
 
 async def get_margins(port: int, 
-                      df_nakeds: pd.DataFrame, 
-                      lot_path: Path=None,
+                      contracts: Union[pd.Series, list, Contract],
+                      orders: Union[pd.Series, list, MarketOrder, None]=None,                      
+                      lots_path: Path=None,
                       ACTION: str='SELL', 
                       chunk_size: int=100,
                       CID: int=0):
+    """
+    [async] Gets margins for options contracts with `orders` or `ACTION`
 
-    opt_contracts = df_nakeds.contract.to_list()
+    Parameters
+    ---
+    contracts: df with `contract` field | list
+    order: list of `MarketOrder` | `None` requires an `ACTION`
+    ACTION: `BUY` or `SELL` needed if no `orders` are provided. Defaults to `SELL`
 
-    results = list()
+    """
+    
+    opt_contracts = to_list(contracts)
 
     pbar = tqdm(total=len(opt_contracts),
                     desc="Getting margins:",
@@ -982,18 +1080,40 @@ async def get_margins(port: int,
                     ncols=80,
                     leave=True,
                 )
+    
+    # prepare orders
+    if orders:
+        orders = to_list(orders)
 
-    df_nakeds = df_nakeds.assign(conId=[c.conId for c in opt_contracts]).\
-                set_index('conId')
+        if len(orders) == 1: # single order
+            orders = orders*len(opt_contracts)
 
-    chunks = chunk_me(opt_contracts, chunk_size)
+    else:
+        orders = [None]*len(opt_contracts)
+    
+    results = list()
+
+    df_contracts = clean_ib_util_df(opt_contracts)
+
+    df_contracts = df_contracts.assign(conId=[c.conId for c in opt_contracts], order = orders)\
+                                .set_index('conId')
+
+    cos = list(zip(df_contracts.contract, df_contracts.order))
+
+    chunks = chunk_me(cos, chunk_size)
 
     with await IB().connectAsync(port=port, clientId=CID) as ib:
         
         for cts in chunks:
 
-            tasks = [asyncio.create_task(get_a_margin(ib, contract, lot_path), name= contract.localSymbol) 
-                    for contract in cts]
+            tasks = [asyncio.create_task(get_a_margin(ib=ib, 
+                                                        contract=contract,
+                                                        order=order,
+                                                        ACTION=ACTION,
+                                                        lots_path=lots_path), 
+                                                        name= contract.localSymbol) 
+                        for contract, order in cts]        
+
 
             margin = await asyncio.gather(*tasks)
 
@@ -1003,13 +1123,12 @@ async def get_margins(port: int,
 
     flat_results ={k: v for r in results for k, v in r.items()}
     df_mgncomm = pd.DataFrame(flat_results).T
-    df_out = df_nakeds.join(df_mgncomm).reset_index()
+    df_out = df_contracts.join(df_mgncomm).reset_index()
 
     pbar.close()
 
     return df_out
 
-    
 def create_target_opts(market: str) -> pd.DataFrame:
 
     """Final naked target options with expected price"""
@@ -1099,7 +1218,7 @@ def make_unqualified_nse_underlyings(symbols: list) -> list:
 
 
 async def assemble_nse_underlyings(port: int) -> dict:
-    """Assembles a dictionary of NSE underlying contracts"""
+    """[async] Assembles a dictionary of NSE underlying contracts"""
 
     with await IB().connectAsync(port=port) as ib:
 
@@ -1133,6 +1252,8 @@ def make_nse_lots() -> dict:
     clean_lots = {k: v for k, v 
                   in lots.items() 
                   if k not in BLACKLIST}
+
+    clean_lots['NIFTY'] = 50 # Sometimes nse_fno_lots_sizes gives 0!
     
     # splits dict
     symbol_list, lot_list = zip(*clean_lots.items()) 
@@ -1263,7 +1384,7 @@ def make_unqualified_snp_underlyings(df: pd.DataFrame) -> pd.DataFrame:
     
 
 async def assemble_snp_underlyings(PORT: int) -> dict:
-    """Assembles a dictionary of SNP underlying contracts"""
+    """[async] Assembles a dictionary of SNP underlying contracts"""
 
     CID = Vars('SNP').CID
 
@@ -1337,7 +1458,8 @@ def build_base(market: str,
         unds = asyncio.run(assemble_nse_underlyings(PORT))
 
     # pickle underlyings
-    pickle_with_age_check(unds, unds_path, 0)
+    # pickle_with_age_check(unds, unds_path, 0) # No need to age-check, for fresh base build
+    pickle_me(unds, unds_path)
 
     # Make chains for underlyings and limit the dtes
     df_chains = asyncio.run(make_chains(port=PORT,
@@ -1385,12 +1507,13 @@ def build_base(market: str,
 
     # Get the option margins
     if MARKET == 'NSE':
-        df_opt_margins = asyncio.run(get_margins(PORT, 
-                                                 df_all_qualified_options, 
-                                                 lots_path))
+        df_opt_margins = asyncio.run(get_margins(port=PORT, 
+                                                 contracts=df_all_qualified_options, 
+                                                 lots_path=lots_path))
     else: # no need for lots_path
-        df_opt_margins = asyncio.run(get_margins(PORT, 
-                                                 df_all_qualified_options))
+        df_opt_margins = asyncio.run(get_margins(port=PORT, 
+                                                 contracts=df_all_qualified_options,
+                                                 lots_path=None))
     pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
 
     # Get alll the options
@@ -1401,7 +1524,7 @@ def build_base(market: str,
 
 
 async def get_open_orders(ib) -> pd.DataFrame:
-    """Gets open orders in a df"""
+    """[async] Gets open orders in a df"""
 
     # ACTIVE_STATUS is common for nse and snp
     ACTIVE_STATUS = Vars('SNP').ACTIVE_STATUS 
@@ -1413,10 +1536,19 @@ async def get_open_orders(ib) -> pd.DataFrame:
     trades = ib.trades()
 
     if trades:
-        all_trades_df = (util.df(t.contract for t in trades).join(
-            util.df(t.orderStatus
-                    for t in trades)).join(util.df(t.order for t in trades),
-                                            lsuffix="_"))
+
+        all_trades_df = clean_ib_util_df([t.contract for t in trades]) \
+            .join(util.df(t.orderStatus for t in trades)) \
+            .join(util.df(t.order for t in trades), lsuffix="_")
+        
+        order = pd.Series([t.order for t in trades], name='order')
+
+        all_trades_df = all_trades_df.assign(order=order)
+        
+        # all_trades_df = (util.df(t.contract for t in trades).join(
+        #     util.df(t.orderStatus
+        #             for t in trades)).join(util.df(t.order for t in trades),
+        #                                     lsuffix="_"))
 
         all_trades_df.rename({"lastTradeDateOrContractMonth": "expiry"},
                                 axis="columns",
@@ -1435,7 +1567,7 @@ def prepare_to_sow(market: str,
                    PAPER: bool=False,
                    build_from_scratch: bool=False,
                    save_sow: bool=True,
-                   cancel_all_open_ords: bool=False) -> pd.DataFrame():
+                   ) -> pd.DataFrame:
     """Prepares the naked sow dataframe"""
 
     MARKET = market.upper()
@@ -1472,10 +1604,6 @@ def prepare_to_sow(market: str,
     # Remove open orders from df
     if ~df_openords.empty:
         df = df[~df.symbol.isin(set(df_openords.symbol))]
-
-    # Cancel open orders, if selected
-    if cancel_all_open_ords:
-        asyncio.run(cancel_all_api_orders(MARKET))
 
     # Keep options with margin and expected price only
     margins_only = ~df.margin.isnull()
@@ -1548,7 +1676,7 @@ def quick_pf(ib) -> Union[None, pd.DataFrame]:
     return df_pf
 
 async def get_order_pf(PORT):
-    """Gets the open orders and portfolios"""
+    """[async] Gets the open orders and portfolios"""
     with await IB().connectAsync(port=PORT) as ib:
         df_openords = await get_open_orders(ib)
         df_pf = quick_pf(ib)
@@ -1559,7 +1687,7 @@ async def get_order_pf(PORT):
 async def cancel_all_api_orders(MARKET):
 
     """
-    Cancels all API orders.
+    [async] Cancels all API orders.
     Does not cancel TWS direct orders.
 
     PORT: TWS / IB port for cancellation
@@ -1573,8 +1701,6 @@ async def cancel_all_api_orders(MARKET):
     cancelled_orders = []
 
     with await IB().connectAsync(port=PORT) as ib:
-
-        # await ib.reqAllOpenOrdersAsync()
 
         await ib.reqAllOpenOrdersAsync()
 
@@ -1597,10 +1723,44 @@ async def cancel_all_api_orders(MARKET):
     return cancelled_orders
 
 
-#!!! TEMP FUNCTION START
+
+from tqdm import tqdm
+
+from utils import chunk_me
+
+delay = 0.75 # seconds per chunk
+
+async def cancel_orders(PORT: int,
+                        orders_to_cancel: list,
+                        chunk_size: int=25, 
+                        delay: float=0.75) -> list:
+    """
+    [async] Cancel given api orders in chunks
+    orders_to_cancel: list of orders
+    """
+
+    chunks = tqdm(chunk_me(data=orders_to_cancel, size=chunk_size), desc="Cancel non-portfolio open orders")
+
+    cancels = []
+
+    with await IB().connectAsync(port=PORT) as ib:
+
+        for chunk in chunks:
+            for order in chunk:
+                cancelled = ib.cancelOrder(order)
+                cancels.append(cancelled)
+
+            await asyncio.sleep(delay)
+
+    logger.info(f"{len(orders_to_cancel)} open orders were cancelled")
+
+    return cancels
+
+
 
 async def place_orders_async(MARKET:str, PAPER: bool, 
                             cos:list, blk_size: int=25):
+    """[async] Places orders in the system"""
 
     _vars = Vars(MARKET)
 
@@ -1626,10 +1786,9 @@ async def place_orders_async(MARKET:str, PAPER: bool,
                     trades.append(td)
                 await asyncio.sleep(0.75)
 
-        logger.info(f"Placed {len(trades)} orders!")
+        # logger.info(f"Placed {len(trades)} orders!")
 
     return trades
-
 
     
 def sow_me(MARKET: str, 
@@ -1641,35 +1800,48 @@ def sow_me(MARKET: str,
 
     Sows always will delete existing API open orders
     """
+    _vars = Vars(MARKET)
+    ACTIVE_STATUS = Vars(MARKET).ACTIVE_STATUS
 
-    ACTIVE_STATUS = Vars(MARKET).ACTIVE_STATUS 
+    if PAPER:
+        PORT = _vars.PAPER
+    else:
+        PORT = _vars.PORT
 
     df = prepare_to_sow(MARKET, 
             build_from_scratch = build_from_scratch,
             save_sow = save_sow,
-            cancel_all_open_ords=True)
+            )
+    
+    # get portfolio
+    df_current_openords, df_pf = asyncio.run(get_order_pf(PORT))
 
-    # Make (contract, order) tuple
+    # get current open orders not be cancelled.
+    # ...this could be due to manual TWS orders or `reap`` orders
+    df_2protect = df_current_openords[df_current_openords.symbol.isin(df_pf.symbol)]   
+
+    orders_to_cancel = df_current_openords[~df_current_openords.symbol.isin(df_2protect.symbol)].order.to_list()
+
+    asyncio.run(cancel_orders(PORT, orders_to_cancel))
+    
+    # Place new orders
+    # ... Make (contract, order) tuple
+
     cos = [(contract , LimitOrder('Sell', qty, price))
         for contract, qty, price in zip(df.contract, df.lot_size, df.expPrice)]
 
     orders = asyncio.run(place_orders_async(MARKET=MARKET, 
-                               PAPER=PAPER, 
-                               cos=cos))
+                            PAPER=PAPER, 
+                            cos=cos))
     
     success = [o for o in orders 
-               if o.orderStatus.status in ACTIVE_STATUS]
-    logger.info(f"Sowed {len(success)} orders!")
+            if o.orderStatus.status in ACTIVE_STATUS]
+    
+    logger.info(f"Sowed {len(success)} orders")
 
-    return success
+    return df
 
-#!!! TEMP FUNCTION END
+
 
 if __name__ == "__main__":
     pass
-
-    # MARKET = 'NSE'
-    
-    # df = prepare_to_sow(MARKET, 
-    #                     build_from_scratch=True)
-    # print(df)

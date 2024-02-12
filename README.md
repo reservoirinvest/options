@@ -8,9 +8,11 @@
 
 - [x] Build RoM for naked_targets
 - [x] Automate `sow`
-- [ ] Build `run.py` with a simple CLI
+- [x] Build `run.py` with a simple CLI
+- [x] Make functions for `cancel_api_ords`
+- [x] Make function for `cancel_ords` in which you can give the specific orders.    
+    -- replace sow_me's `cancel_api_ords` with `cancel_ords` only for equity position open orders.
 - [ ] Make function for getting status of a symbol (See `Symbol Statuses` below)
-- [ ] Make functions for `cancel_api_ords` and `cancel_all_ords`
 - [ ] place closing orders for existing `reap`
 
 # For SNP
@@ -26,7 +28,7 @@
 
 # Symbol `States` with colours.
 
-- 'unsowed': No orders to sow. No existing position. [white]
+- 'unsowed': No orders sown. No existing position. [white]
 - 'orphaned' : A long call or put option (positive) position that doesn't have an underlying position. [grey]
 
 - 'perfect': Ticker position present that is both covered and protected (or) Option position that is with a reap order. [green]

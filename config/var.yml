@@ -11,6 +11,8 @@ COMMON:
   - PendingSubmit
   - PreSubmitted
   - Submitted
+
+  GAPBUMP: 0.5 # Bumps up sdev to cater for gap up / down in closed market
   
   BAR_FORMAT: "{desc:<10}{percentage:3.0f}%|{bar:25}{r_bar}{bar:-10b}"
 
@@ -47,13 +49,13 @@ NSE:
   MINDTE: 0
   MAXDTE: 60
 
-  CALLSTDMULT: 1.33 # Min stdev multiple for calls
-  PUTSTDMULT: -1.2 # Min stdev multiple for puts
+  CALLSTDMULT: 1.45 # Min stdev multiple for calls
+  PUTSTDMULT: -1.3 # Min stdev multiple for puts
   DTESTDEVLOW: 0.05 # Upper limit of adjustment to stdev based on DTE
   DTESTDEVHI: 1 # Lower limit of adjustment to stdev based on DTE
   DECAYRATE: 0.05 # Decay rate of the sdev adjustment curve on DTE
 
-  MINEXPROM: 1.4
+  MINEXPROM: 1.5
 
   MINOPTSELLPRICE: 0.25
 
@@ -73,17 +75,16 @@ SNP:
   CID: 2
   PAPER: 1301 # For paper trades in IBG
 
-  MINDTE: 0
-  MAXDTE: 45
+  MINDTE: 1
+  MAXDTE: 60
 
-  CALLSTDMULT: 1.3 # Min stdev multiple for calls
+  CALLSTDMULT: 2 # Min stdev multiple for calls
   PUTSTDMULT: -1.3 #  Min stdev multiple for puts
   DTESTDEVLOW: 0.1 # Upper limit of adjustment to stdev based on DTE
-  DTESTDEVHI: 1.4 # Lower limit of adjustment to stdev based on DTE
+  DTESTDEVHI: 1.2 # Lower limit of adjustment to stdev based on DTE
   DECAYRATE: 0.05 # Decay rate of the sdev adjustment curve on DTE
 
-
-  MINEXPROM: 2.3
+  MINEXPROM: 1.5
 
   MINOPTSELLPRICE: 0.5
   

@@ -19,7 +19,7 @@ if __name__ == "__main__":
 
     # PAPER OR LIVE
     # =============
-    msg_header = "Do you want to go with LIVE or PAPER trades ? :\n"
+    msg_header = "\nDo you want to go with LIVE or PAPER trades ? :\n"
     choice_list = ["LIVE", "PAPER"]
 
     port_choice = make_a_choice(choice_list, msg_header)
@@ -39,7 +39,8 @@ if __name__ == "__main__":
                           "Build sow df from pickle. Don't order.",
                           "Build sow df from scratch. Don't order or save pickles."]
 
-    action_choice = make_a_choice(action_choice_list)
+    action_header = "\nChoose a number for the action to be performed:\n"
+    action_choice = make_a_choice(action_choice_list, action_header)
 
     my_choice = next(iter(action_choice.keys()))
     my_choice_text = next(iter(action_choice.values()))
@@ -47,16 +48,16 @@ if __name__ == "__main__":
 
     match my_choice:
 
-        case 1:
+        case 1: #Cancel API open orders. Sow orders from scratch.
             timer = Timer("Sow from scratch")
             timer.start()
             out = sow_me(MARKET=MARKET, build_from_scratch=True, save_sow=True)
             timer.stop()
 
-        case 2:
+        case 2:# Sow orders from pickle. Cancel API open orders. Don't save sows.
             out = sow_me(MARKET=MARKET, build_from_scratch=False, save_sow=False)
 
-        case 3:
+        case 3: # Build sow df from pickle. Don't order.
             out = get_sows_from_pickles(MARKET, PAPER)
             
         case 4: # Build base but DON'T SAVE PICKLES

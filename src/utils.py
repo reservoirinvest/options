@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import pickle
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,17 +13,18 @@ from typing import Iterable, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import pandas_market_calendars as mcal
 import pytz
 import yaml
+# from data.master.dclass import OpenOrder
+from dclass import OpenOrder, Portfolio
 from from_root import from_root
 from ib_insync import IB, Contract, Index, LimitOrder, MarketOrder, Stock, util
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
+from pytz import timezone
 from scipy.integrate import quad
 from tqdm.asyncio import tqdm, tqdm_asyncio
-
-# from data.master.dclass import OpenOrder
-from dclass import OpenOrder, Portfolio
 
 ROOT = from_root()
 BAR_FORMAT = "{desc:<10}{percentage:3.0f}%|{bar}{r_bar}"
@@ -100,6 +102,108 @@ def to_list(data):
         return list(data)
     except TypeError:
         return [data]
+    
+
+
+async def isMarketOpen(MARKET: str) -> bool:
+    """[async] Determines if market is open or not
+
+    Args:
+
+        (ib): as connection object,
+        (MARKET): ('NSE'|'SNP')
+
+    Returns:
+        bool
+
+    Note:
+     - Though IB uses UTC elsewhere, in contract details `zone` is available as a string!
+     - ...hence times are converted to local market times for comparison
+
+    """
+
+
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    # Establish the timezones
+    tzones = {
+        "UTC": timezone("UTC"),
+        "Asia/Calcutta": timezone("Asia/Kolkata"),
+        "US/Eastern": timezone("US/Eastern"),
+    }
+
+    with await IB().connectAsync(port=PORT) as ib:
+
+        if MARKET.upper() == "NSE":
+            ct = await ib.qualifyContractsAsync(
+                Stock(symbol="RELIANCE", exchange="NSE", currency="INR"))
+        elif MARKET.upper() == "SNP":
+            ct = await ib.qualifyContractsAsync(
+                Stock(symbol="INTC", exchange="SMART", currency="USD"))
+        else:
+            print(f"\nUnknown market {MARKET}!!!\n")
+            return None
+
+        ctd = await ib.reqContractDetailsAsync(ct[0])
+
+    hrs = util.df(ctd).liquidHours.iloc[0].split(";")
+    zone = util.df(ctd).timeZoneId.iloc[0].split(" ")[0]
+
+
+    # Build the time dataframe by splitting hrs
+    tframe = pd.DataFrame([re.split(":|-|,", h) for h in hrs]).rename(columns={
+        0: "from",
+        1: "start",
+        2: "to",
+        3: "end"
+    })
+    tframe["zone"] = zone
+
+    tframe["now"] = datetime.datetime.now(tzones[zone])
+
+    tframe = tframe.dropna()
+
+    open = pd.to_datetime(tframe["from"] + tframe["start"]).apply(
+        lambda x: x.replace(tzinfo=tzones[zone]))
+    close = pd.to_datetime(tframe["to"] + tframe["end"]).apply(
+        lambda x: x.replace(tzinfo=tzones[zone]))
+
+    tframe = tframe.assign(open=open, close=close)
+    tframe = tframe.assign(isopen=(tframe["now"] >= tframe["open"])
+                            & (tframe["now"] <= tframe["close"]))
+
+    market_open = any(tframe["isopen"])
+
+    return market_open
+
+
+
+def market_is_open(market: str, date: datetime.datetime=None) -> bool:
+    """SOMETIMES DOESN'T WORK!!!
+    ---
+    
+    True if market is open.
+    market: 'SNP' (converted to NYSE) | 'NSE'.
+    date: <optional>. Takes datetime.now() if no date is given. 
+    """
+
+    if not date:
+        date = datetime.datetime.now()
+
+    market = market.upper()
+    if market == 'SNP':
+        market = 'NYSE'
+
+    cal = mcal.get_calendar(market)
+    my_cal = cal.schedule(start_date=date, end_date=date)
+
+    start = datetime.datetime.fromtimestamp(my_cal.market_open.iloc[0].timestamp())
+    end = datetime.datetime.fromtimestamp(my_cal.market_close.iloc[0].timestamp())
+
+    result = start <= date <= end
+
+    return result
 
 
 def make_a_choice(choice_list: list,
@@ -191,6 +295,10 @@ def get_lots(contract, lots_path: Union[Path, None]=None):
                 return None
             else:
                 return lots.get(contract.symbol, None)
+
+        case ('OPT', 'SMART'):
+            return 1
+
         
         case ('OPT', _):  # Any exchange other than 'NSE' for options
             return 1
@@ -252,6 +360,24 @@ def delete_all_pickles(MARKET: str):
     delete_files(file_pattern)
 
     return None
+
+
+
+def join_my_df_with_another(my_df: pd.DataFrame, other_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Joins my df with other, protecting my columns
+    my_df: original df
+    other_df: df columns to be imported from
+
+    Note:
+    ---
+    Index should be common across the dfs
+    """
+
+    df_out = my_df.join(other_df, lsuffix="DROP").filter(regex="^(?!.*DROP)")
+
+    return df_out
+
 
 
 def get_prec(v, base):
@@ -455,6 +581,8 @@ async def qualify_me(ib: IB,
                      desc: str = 'Qualifying contracts'):
     """[async] Qualify contracts asynchronously"""
 
+    contracts = to_list(contracts) # to take care of single contract
+
     tasks = [asyncio.create_task(ib.qualifyContractsAsync(c), name=c.localSymbol) for c in contracts]
 
     await tqdm_asyncio.gather(*tasks, desc=desc)
@@ -468,6 +596,8 @@ async def qualify_conIds(PORT: int,
                          conIds: list,
                          desc: str = "Qualifying conIds"):
     """[async] Makes and qualifies contracts from conId list"""
+
+    conIds = to_list(conIds) # to take care of single conId
     
     contracts = [Contract(conId=conId) for conId in conIds]
 
@@ -640,7 +770,7 @@ async def get_price_iv(ib, contract, sleep: float=2) -> dict:
     mkt_data = await get_market_data(ib, contract, sleep)
 
     if math.isnan(mkt_data.marketPrice()):
-        logger.info(f"mkt_data for {contract.localSymbol} has no market price")
+        # logger.info(f"mkt_data for {contract.localSymbol} has no market price")
 
         if math.isnan(mkt_data.close):
             tick_data = await get_tick_data(ib, contract)
@@ -649,7 +779,7 @@ async def get_price_iv(ib, contract, sleep: float=2) -> dict:
             if math.isnan(tick_data.marketPrice()):
                 undPrice = tick_data.close
                 if math.isnan(undPrice):
-                    logger.info(f"No price for {contract.localSymbol}!!!")
+                    logger.info(f"No price found for {contract.localSymbol}!")
             else:
                 undPrice = tick_data.marketPrice()
         else:
@@ -738,7 +868,7 @@ async def make_chains(port: int,
         else:
             MULTIPLIER = 1
 
-        df_chains = df_chains.assign(multiplier = MULTIPLIER)
+        df_chains = df_chains.assign(multiplier = MULTIPLIER, exchange = MARKET)
         
     return df_chains
 
@@ -767,22 +897,31 @@ def make_target_option_contracts(df_target: list, MARKET: str):
     return option_contracts
 
 
-def sdev_for_dte(dte: float, DTESTDEVLOW: float, DTESTDEVHI: float, DECAYRATE: float=0.1):
+def sdev_for_dte(dte: float,
+                 DTESTDEVLOW: float, DTESTDEVHI: float, 
+                 DECAYRATE: float=0.1,
+                 GAPBUMP: float=0):
     """
     Calculates the standard deviation (sdev) for a given dte from a curve.
 
     Args:
         dte: The time value (days to end) for which to calculate the sdev.
-        r: The decay rate (default: 0.1).
+        DECAYRATE: The decay rate (default: 0.1).
         DTESTDEVLOW: The lower limit of the sdev range (default: 0.5).
         DTESTDEVHI: The upper limit of the sdev range (default: 1.7).
+        GAPBUMP: Upward penalty for sdev if market is not open to avoid gap ups / downs.
 
     Returns:
         The calculated standard deviation value.
     """
 
     y_range = DTESTDEVHI - DTESTDEVLOW
-    return DTESTDEVLOW + y_range * np.exp(-DECAYRATE * dte)
+
+    result = DTESTDEVLOW + y_range * np.exp(-DECAYRATE * dte)
+    
+    result = result + GAPBUMP
+
+    return result
 
 
 def target_options_with_adjusted_sdev(df_chains: pd.DataFrame,
@@ -790,16 +929,30 @@ def target_options_with_adjusted_sdev(df_chains: pd.DataFrame,
                                       how_many: int,
                                       DTESTDEVLOW: float, 
                                       DTESTDEVHI: float,
-                                      DECAYRATE: float) -> pd.DataFrame:
+                                      DECAYRATE: float,
+                                      MARKET_IS_OPEN: bool) -> pd.DataFrame:
     
     """Adjust the standard deviation to DTE, penalizes DTES closer to zero"""
 
     # Get the extra SD adjusted to DTE
     # xtra_sd = 1-(df_chains.dte/100)
-    xtra_sd = df_chains.dte.apply(lambda dte: sdev_for_dte(dte, 
+
+    MARKET = df_chains.exchange.unique()[0]
+
+    _vars = Vars(MARKET)
+
+    # Factor a bump to dev if market is not open
+    if MARKET_IS_OPEN:
+        GAPBUMP = 0
+    else:
+        GAPBUMP = _vars.GAPBUMP
+
+    xtra_sd = df_chains.dte.apply(lambda dte: sdev_for_dte(dte=dte,
                                                            DTESTDEVLOW=DTESTDEVLOW, 
                                                            DTESTDEVHI=DTESTDEVHI,
-                                                           DECAYRATE=DECAYRATE))
+                                                           DECAYRATE=DECAYRATE,
+                                                           GAPBUMP=GAPBUMP
+                                                           ))
 
     # Build the series for revised SD
     sd_revised = STDMULT + xtra_sd if STDMULT > 0 else STDMULT - xtra_sd
@@ -836,12 +989,16 @@ async def make_qualified_opts(port:int,
     
     """[async] Make naked puts from chains, based on PUTSTDMULT"""
 
+    MARKET_IS_OPEN = await isMarketOpen(MARKET)
+
     df_ch2 = target_options_with_adjusted_sdev(df_chains = df_chains, 
                                                STDMULT = STDMULT,
+                                               how_many = how_many,
                                                DTESTDEVLOW = DTESTDEVLOW,
                                                DTESTDEVHI = DTESTDEVHI,
                                                DECAYRATE=DECAYRATE,
-                                               how_many = how_many)
+                                               MARKET_IS_OPEN=MARKET_IS_OPEN,
+                                               )
 
     df_target = df_ch2[['symbol', 'strike', 'expiry', 'right',]].reset_index()
 
@@ -1021,9 +1178,12 @@ async def get_a_margin(ib: IB,
                        order: Union[MarketOrder, None]=None,
                        lots_path: Path=None,
                        ACTION: str='SELL',
-                       ):
+                       ) -> dict:
     
-    """[async] Gets a margin"""
+    """
+    [async] Gets a margin.
+
+    Gives negative margin for `BUY` trades"""
 
     if lots_path: # For NSE
         lot_size = get_lots(contract, lots_path)
@@ -1041,21 +1201,29 @@ async def get_a_margin(ib: IB,
     ib.errorEvent -= onError
     logger.remove()
 
+    # to deal with option contracts with timezone errors
+    if int(contract.conId) == 0:
+        cid = contract.symbol + contract.lastTradeDateOrContractMonth + str(contract.strike) + contract.right
+    else:
+        cid = contract.conId
+
     try:
-        output = clean_a_margin(wif, contract.conId)
+        output = clean_a_margin(wif, cid)
+
     except KeyError:
-        output = {contract.conId: {
+        output = { cid: {
                   'margin': None,
                   'comm': None}}
         
         logger.error(f"{contract.localSymbol} has no margin and commission")
 
-    output[contract.conId]['lot_size'] = lot_size
+    lot = order.totalQuantity
+    output[cid]['lot_size'] = lot
     return output
 
 
 async def get_margins(port: int, 
-                      contracts: Union[pd.Series, list, Contract],
+                      contracts: Union[pd.DataFrame, pd.Series, list, Contract],
                       orders: Union[pd.Series, list, MarketOrder, None]=None,                      
                       lots_path: Path=None,
                       ACTION: str='SELL', 
@@ -1072,7 +1240,10 @@ async def get_margins(port: int,
 
     """
     
-    opt_contracts = to_list(contracts)
+    if isinstance(contracts, pd.DataFrame):
+        opt_contracts = to_list(contracts.contract)
+    else:
+        opt_contracts = to_list(contracts)
 
     pbar = tqdm(total=len(opt_contracts),
                     desc="Getting margins:",
@@ -1095,7 +1266,12 @@ async def get_margins(port: int,
 
     df_contracts = clean_ib_util_df(opt_contracts)
 
-    df_contracts = df_contracts.assign(conId=[c.conId for c in opt_contracts], order = orders)\
+    # to take care of expiry date discrepancy between Chicago options
+    conId = [c.conId if int(c.conId) > 0 
+            else c.symbol + c.lastTradeDateOrContractMonth + str(c.strike) + c.right 
+            for c in opt_contracts]
+
+    df_contracts = df_contracts.assign(conId=conId, order = orders)\
                                 .set_index('conId')
 
     cos = list(zip(df_contracts.contract, df_contracts.order))
@@ -1148,6 +1324,9 @@ def create_target_opts(market: str) -> pd.DataFrame:
 
     cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
     df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
+
+    # remove NaN's with a commission value
+    df_naked_targets.comm.fillna(df_naked_targets.comm.dropna().unique()[0], inplace=True) 
 
     # Get precise expected prices
     xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
@@ -1217,30 +1396,30 @@ def make_unqualified_nse_underlyings(symbols: list) -> list:
     return contracts
 
 
-async def assemble_nse_underlyings(port: int) -> dict:
+async def assemble_nse_underlyings(PORT: int) -> dict:
     """[async] Assembles a dictionary of NSE underlying contracts"""
 
-    with await IB().connectAsync(port=port) as ib:
+    # get FNO list
+    fnos = fnolist()
 
-        # get FNO list
-        fnos = fnolist()
+    # remove blacklisted symbols - like NIFTYIT that doesn't have options
+    nselist = [n for n in fnos if n not in Vars('NSE').BLACKLIST]
 
-        # remove blacklisted symbols - like NIFTYIT that doesn't have options
-        nselist = [n for n in fnos if n not in Vars('NSE').BLACKLIST]
+    # clean to get IB FNOs
+    nse2ib_yml_path = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
+    ib_fnos = nse2ib(nselist, nse2ib_yml_path)
 
-        # clean to get IB FNOs
-        nse2ib_yml_path = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
-        ib_fnos = nse2ib(nselist, nse2ib_yml_path)
-
-        # make raw underlying fnos
-        raw_nse_contracts = make_unqualified_nse_underlyings(ib_fnos)
+    # make raw underlying fnos
+    raw_nse_contracts = make_unqualified_nse_underlyings(ib_fnos)
+    
+    with await IB().connectAsync(port=PORT) as ib:
 
         # qualify underlyings
         qualified_unds = await qualify_me(ib, raw_nse_contracts, desc='Qualifying Unds')
 
-        unds_dict = make_dict_of_qualified_contracts(qualified_unds)
+    unds_dict = make_dict_of_qualified_contracts(qualified_unds)
 
-        return unds_dict
+    return unds_dict
 
 
 def make_nse_lots() -> dict:
@@ -1563,6 +1742,46 @@ async def get_open_orders(ib) -> pd.DataFrame:
     return df_openords
 
 
+def pickle_the_sow(df: pd.DataFrame, 
+                   _vars: dict, 
+                   MARKET_IS_OPEN: bool) -> dict:
+    
+    """
+    Pickles sow with key parameters for analysis
+    Outputs a dict(`df_sow`, `configed`, `market_open`)"""
+                   
+    # Determine the filename and path
+
+    MARKET = 'NSE' if df.exchange.unique()[0] == 'NSE' else 'SNP'
+
+    ROOT = from_root()
+    _vars = Vars(MARKET)
+    DATAPATH = ROOT / 'data' / MARKET.lower()
+
+    dt = datetime.datetime.now().strftime("_%I_%M_%p_on_%d-%b-%Y")
+    file_name = "".join([MARKET,'_sow', dt , '.pkl'])
+    TEMP_SOW_PATH = DATAPATH.parent / 'ztemp' / file_name
+
+    # Get config variables
+    vars_d = _vars.__dict__
+    # Filter relevant fields
+    want_fields = ['GAPBUMP', 'MINDTE', 'MAXDTE', 'CALLSTDMULT', 'PUTSTDMULT', 
+    'DTESTDEVLOW', 'DTESTDEVHI', 'DECAYRATE', 
+    'MINEXPROM', 'MINOPTSELLPRICE']
+
+    config_dict = {k: v for k, v in vars_d.items() if k in want_fields}
+
+    # Make the object to pickle
+    obj_to_pickle = {'df_sow': df, 
+    'configed' : config_dict,
+    'market_open': MARKET_IS_OPEN}
+
+    # Pickle
+    pickle_me(obj_to_pickle, TEMP_SOW_PATH)
+
+    return obj_to_pickle
+
+
 def prepare_to_sow(market: str,
                    PAPER: bool=False,
                    build_from_scratch: bool=False,
@@ -1577,7 +1796,8 @@ def prepare_to_sow(market: str,
     if PAPER:
         PORT = _vars.PAPER
 
-    puts_only = True if MARKET == 'SNP' else False
+    # puts_only = True if MARKET == 'SNP' else False
+    puts_only = False
 
     if build_from_scratch:
 
@@ -1623,6 +1843,10 @@ def prepare_to_sow(market: str,
         SOW_PATH = DATAPATH / 'df_sow.pkl'
         pickle_me(df, SOW_PATH)
 
+        # Store sows in temp path for analysis
+        MARKET_IS_OPEN = asyncio.run(isMarketOpen(MARKET))
+        pickle_the_sow(df, _vars, MARKET_IS_OPEN)
+        
     return df
 
 
@@ -1660,7 +1884,7 @@ def quick_pf(ib) -> Union[None, pd.DataFrame]:
     if pf != []:
         df_pf = util.df(pf)
         df_pf = (util.df(list(df_pf.contract)).iloc[:, :6]).join(
-            df_pf.drop(columns=["contract", "account"]))
+            df_pf.drop(columns=["account"]))
         df_pf = df_pf.rename(
             columns={
                 "lastTradeDateOrContractMonth": "expiry",
@@ -1723,13 +1947,6 @@ async def cancel_all_api_orders(MARKET):
     return cancelled_orders
 
 
-
-from tqdm import tqdm
-
-from utils import chunk_me
-
-delay = 0.75 # seconds per chunk
-
 async def cancel_orders(PORT: int,
                         orders_to_cancel: list,
                         chunk_size: int=25, 
@@ -1739,7 +1956,7 @@ async def cancel_orders(PORT: int,
     orders_to_cancel: list of orders
     """
 
-    chunks = tqdm(chunk_me(data=orders_to_cancel, size=chunk_size), desc="Cancel non-portfolio open orders")
+    chunks = tqdm(chunk_me(data=orders_to_cancel, size=chunk_size), desc="Cancelling non-portfolio orders")
 
     cancels = []
 
@@ -1780,7 +1997,7 @@ async def place_orders_async(MARKET:str, PAPER: bool,
         else:
             cobs = [cos[i:i + blk_size] for i in range(0, len(cos), blk_size)]
 
-            for b in tqdm(cobs):
+            for b in tqdm(cobs, desc=f"Placing {MARKET} orders"):
                 for c, o in b:
                     td = ib.placeOrder(c, o)
                     trades.append(td)

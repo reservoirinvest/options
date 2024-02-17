@@ -44,5 +44,8 @@
 
 - 'unreaped' : A naked call or put option that doesn't have an open order to reap. [light-yellow]
 
+# NOTES
+1. Option expiries are wonky in SNP. Use `US/Central Standard` Time to fix the wonky CBOE option expiry dates.  
+
 # Good reads
 1. Check out [Covered calls writing with protective put](https://www.thebluecollarinvestor.com/covered-call-writing-with-protective-puts-a-proposed-strategy/) article

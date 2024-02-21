@@ -28,12 +28,15 @@
 
 # Symbol `States` with colours.
 
+- 'unreaped' : A naked call or put option that doesn't have an open order to reap. [light-yellow]
+- 'uncovered': Ticker position present but with no covered call or put option and without any option open orders supporting it [yellow]
+
 - 'unsowed': No orders sown. No existing position. [white]
 - 'orphaned' : A long call or put option (positive) position that doesn't have an underlying position. [grey]
 
 - 'perfect': Ticker position present that is both covered and protected (or) Option position that is with a reap order. [green]
   
-- 'uncovered': Ticker position present but with no covered call or put option and without any option open orders supporting it [yellow]
+
 - 'unprotected': Ticker position present but with no protective call or put option and without any option open orders [light-red]
 - 'imperfect': Ticker position present that has no cover or protection options and without any option open orders [purple]
   
@@ -42,7 +45,7 @@
 - 'protecting' : Ticker position is covered with option but not protected and has option open orders to protect [pink]
 - 'perfecting' : Ticker position with open orders for covering and protecting, that are not in position yet [light-green]
 
-- 'unreaped' : A naked call or put option that doesn't have an open order to reap. [light-yellow]
+
 
 # NOTES
 1. Option expiries are wonky in SNP. Use `US/Central Standard` Time to fix the wonky CBOE option expiry dates.  

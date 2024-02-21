@@ -19,7 +19,7 @@ import yaml
 # from data.master.dclass import OpenOrder
 from dclass import OpenOrder, Portfolio
 from from_root import from_root
-from ib_insync import IB, Contract, Index, LimitOrder, MarketOrder, Stock, util
+from ib_insync import IB, Contract, Index, LimitOrder, MarketOrder, Stock, Option, util
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
 from pytz import timezone
@@ -291,7 +291,7 @@ def get_lots(contract, lots_path: Union[Path, None]=None):
 
             # Gets the lots of NSE options
             if not lots_path:
-                logger.info(f"No lots_path provided for NSE: {contract.localSymbol}")
+                # logger.info(f"No lots_path provided for NSE: {contract.localSymbol}")
                 return None
             else:
                 return lots.get(contract.symbol, None)
@@ -363,18 +363,35 @@ def delete_all_pickles(MARKET: str):
 
 
 
-def join_my_df_with_another(my_df: pd.DataFrame, other_df: pd.DataFrame) -> pd.DataFrame:
+def join_my_df_with_another(my_df: pd.DataFrame, 
+                            other_df: pd.DataFrame,
+                            idx: Union[str, None] = None) -> pd.DataFrame:
     """
     Joins my df with other, protecting my columns
     my_df: original df
     other_df: df columns to be imported from
+    idx: index as string. Should be a common field.
 
-    Note:
-    ---
-    Index should be common across the dfs
     """
+    
+    if idx:
+        try:
+            my_df = my_df.set_index(idx)
+        except KeyError:
+            pass
 
-    df_out = my_df.join(other_df, lsuffix="DROP").filter(regex="^(?!.*DROP)")
+        try:
+            other_df = other_df.set_index(idx)
+        except KeyError:
+            pass
+
+    if other_df.index.name != my_df.index.name:
+        logger.error(f"Index names of the m_df: {my_df.index.name} and other_df: {other_df.index.name} are different")
+        return None
+
+
+    cols2keep = [c for c in other_df.columns if c not in my_df.columns]
+    df_out = my_df.join(other_df[cols2keep])
 
     return df_out
 
@@ -576,6 +593,27 @@ def get_dte(dt: Union[datetime.datetime, datetime.date, str],
     return dte
 
 
+
+def make_a_raw_contract(symbol: str, MARKET: str, 
+                    secType: str=None, strike: float=None, 
+                    right: str=None, expiry: str=None) -> Contract:
+    
+    """Makes a stock or option contract"""
+    SECTYPE = "STK" if secType == None else secType
+    EXCHANGE = "NSE" if MARKET == "NSE" else "SMART"
+    CURRENCY = "INR" if MARKET == "NSE" else "USD"
+
+    if SECTYPE == 'STK':
+        ct = Stock(symbol=symbol, exchange=EXCHANGE, currency=CURRENCY)
+    elif SECTYPE == 'OPT':
+        ct = Option(symbol=symbol, lastTradeDateOrContractMonth=expiry, strike=strike, right=right, exchange=EXCHANGE)
+    else:
+        logger.error(f"Unknown symbol {symbol} in {MARKET} market")
+
+    return ct
+
+
+
 async def qualify_me(ib: IB, 
                      contracts: list,
                      desc: str = 'Qualifying contracts'):
@@ -754,12 +792,11 @@ async def get_tick_data(ib: IB,
 
     ticker = await ib.reqTickersAsync(c)
     await asyncio.sleep(delay)
-    # ticker = ticker[-1] if isinstance(ticker, list) else ticker
 
     return ticker
 
 
-async def get_price_iv(ib, contract, sleep: float=2) -> dict:
+async def get_a_price_iv(ib, contract, sleep: float=2) -> dict:
 
     """[async] Computes price and IV of a contract.
 
@@ -770,7 +807,6 @@ async def get_price_iv(ib, contract, sleep: float=2) -> dict:
     mkt_data = await get_market_data(ib, contract, sleep)
 
     if math.isnan(mkt_data.marketPrice()):
-        # logger.info(f"mkt_data for {contract.localSymbol} has no market price")
 
         if math.isnan(mkt_data.close):
             tick_data = await get_tick_data(ib, contract)
@@ -792,7 +828,7 @@ async def get_price_iv(ib, contract, sleep: float=2) -> dict:
 
     price_iv = (contract.localSymbol, undPrice, iv)
 
-    logger.remove()
+    # logger.remove()
 
     return price_iv
 
@@ -808,7 +844,7 @@ def get_a_stdev(iv: float, price: float, dte: float) -> float:
 async def combine_a_chain_with_stdev(ib: IB, contract, MARKET: str, sleep: float=3, ) -> pd.DataFrame:
     """[async] makes a dataframe from chain and stdev for a symbol"""
 
-    price_iv = await get_price_iv(ib, contract, sleep)
+    price_iv = await get_a_price_iv(ib, contract, sleep)
     _, undPrice, iv = price_iv
 
     chain = await get_an_option_chain(ib, contract, MARKET)
@@ -895,6 +931,24 @@ def make_target_option_contracts(df_target: list, MARKET: str):
                 )]
     
     return option_contracts
+
+
+def make_equity_contracts(symbols: list, MARKET: str):
+
+    symbols = to_list(symbols)
+
+    """makes equity contracts from a symbol list"""
+
+    EXCHANGE = 'NSE' if MARKET.upper() == 'NSE' else 'SMART'
+
+    contracts = [Contract(
+            symbol=symbol,
+            exchange=EXCHANGE,
+            currency= 'USD' if MARKET.upper() == 'SNP' else 'INR',
+            secType='STK')
+        for symbol in symbols]
+    
+    return contracts
 
 
 def sdev_for_dte(dte: float,
@@ -1024,21 +1078,21 @@ async def make_qualified_opts(port:int,
 # GET OPTION PRICES FOR NAKED PUTS
 # --------------------------------
 
-async def get_opt_prices(ib:IB,
-                         opt_contracts: list, 
+async def get_prices_as_tickers(ib:IB,
+                         contracts: list, 
                          chunk_size: int=44):
     """[async] Gets option prices"""
 
     results = []
 
-    pbar = tqdm(total=len(opt_contracts),
+    pbar = tqdm(total=len(contracts),
                 desc="Getting option prices:",
                 bar_format = BAR_FORMAT,
                 ncols=80,
                 leave=True,
             )
 
-    chunks = chunk_me(opt_contracts, chunk_size)
+    chunks = chunk_me(contracts, chunk_size)
 
     for cts in chunks:
 
@@ -1056,30 +1110,31 @@ async def get_opt_prices(ib:IB,
     return flat_results
 
 
-async def get_opt_price_ivs(port: int, 
-                            qualified_opts: Union[pd.DataFrame, list],
+
+async def get_prices_with_ivs(port: int, 
+                            input_contracts: Union[pd.DataFrame, list],
                             HIGHEST: bool = True,
                             CID: int=0) -> pd.DataFrame:
-    """[async] gets option prices and IVs"""
+    """[async] gets contract prices and IVs"""
 
     try:
-        opt_contracts = qualified_opts.contract.to_list()
+        contracts = input_contracts.contract.to_list()
     except AttributeError:
-        qualified_opts = clean_ib_util_df(qualified_opts)
-        opt_contracts = qualified_opts.contract.to_list()
+        input_contracts = clean_ib_util_df(input_contracts)
+        contracts = input_contracts.contract.to_list()
 
     with await IB().connectAsync(port=port, clientId=CID) as ib:
 
-        opt_prices = await get_opt_prices(ib, opt_contracts)
+        opt_prices = await get_prices_as_tickers(ib, contracts)
 
     df_opt_prices = util.df(opt_prices)
     opt_cols = ['contract', 'time', 'bidSize', 'askSize', 'lastSize', 
     'volume', 'high', 'low', 'bid', 'ask', 'last', 'close']
 
     df_opts = df_opt_prices[opt_cols]
-    duplicated_columns = [col for col in qualified_opts.columns if col in df_opts.columns]
+    duplicated_columns = [col for col in input_contracts.columns if col in df_opts.columns]
 
-    df = qualified_opts.join(df_opts.drop(duplicated_columns, axis=1))
+    df = input_contracts.join(df_opts.drop(duplicated_columns, axis=1))
 
     greek_cols = [ 'undPrice', 'impliedVol', 'delta', 'gamma',
     'vega', 'theta', 'optPrice']
@@ -1097,12 +1152,12 @@ async def get_opt_price_ivs(port: int,
                         join(bid_df, lsuffix='Bid')
     
     # puts optPrice column, if not in df
-    df = recompute_opt_price(df, HIGHEST)
+    df = arrange_prices(df, HIGHEST)
 
     return df
 
 
-def recompute_opt_price(df: pd.DataFrame, 
+def arrange_prices(df: pd.DataFrame, 
                         HIGHEST: bool,
                         *args) -> pd.DataFrame:
     
@@ -1676,7 +1731,7 @@ def build_base(market: str,
                                           ignore_index=True)
 
     # Get the option prices
-    df_opt_prices = asyncio.run(get_opt_price_ivs(PORT, df_all_qualified_options))
+    df_opt_prices = asyncio.run(get_prices_with_ivs(PORT, df_all_qualified_options))
     pickle_with_age_check(df_opt_prices, opt_prices_path, 0)
 
     # Get the lots for nse
@@ -1899,6 +1954,16 @@ def quick_pf(ib) -> Union[None, pd.DataFrame]:
 
     return df_pf
 
+
+async def async_pf(PORT):
+    """[asynch] version of quick_pf"""
+    
+    with await IB().connectAsync(port=PORT) as ib:
+        df_pf = quick_pf(ib)
+
+        return df_pf
+    
+
 async def get_order_pf(PORT):
     """[async] Gets the open orders and portfolios"""
     with await IB().connectAsync(port=PORT) as ib:
@@ -1906,6 +1971,58 @@ async def get_order_pf(PORT):
         df_pf = quick_pf(ib)
 
         return df_openords, df_pf
+    
+
+def get_portfolio_with_margins(MARKET: str) -> pd.DataFrame:
+
+    """Gets current portfolio with margins of them"""
+    
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    # get unds, open orders and portfolio
+    df_pf = asyncio.run(async_pf(PORT))
+
+    desc = "Qualifiying Portfolio"
+    pf_contracts = asyncio.run(qualify_conIds(PORT, df_pf.conId, desc=desc))
+
+    # ...integrate df_pf with multiplier
+    df1 = clean_ib_util_df(pf_contracts).set_index('conId')
+    df2 = df_pf.set_index('conId')
+
+    cols_to_use = df2.columns.difference(df1.columns)
+    df_pf = df1.join(df2[cols_to_use])
+
+    # join the multiplier
+    s = pd.to_numeric(df_pf.multiplier)
+    s.fillna(1, inplace=True)
+    df_pf = df_pf.assign(multiplier=s)
+
+    # Get DTEs
+    df_pf.insert(4, 'dte', df_pf.expiry.apply(lambda x: get_dte(x, MARKET)))
+    df_pf.loc[df_pf.dte <=0, "dte"] = 0
+
+    # Get the costPrice
+    df_pf.insert(9, 'costPrice', abs(df_pf.avgCost/df_pf.position))
+
+    # Assign the actions
+    df_pf = df_pf.assign(action=np.where(df_pf.position < 0, "BUY", "SELL"))
+
+    # build the orders
+    wif_order = [MarketOrder(action, totalQuantity) 
+                for action, totalQuantity 
+                in zip(df_pf.action, abs(df_pf.position).astype('int'))]
+    df_pf = df_pf.assign(wif_order = wif_order)
+
+    contracts = to_list(pf_contracts)
+    orders = df_pf.wif_order.to_list()
+
+    with IB().connect(port=PORT) as ib:
+        df_m = asyncio.run(get_margins(port=PORT, contracts=contracts, orders = orders))
+
+    df_pfm = join_my_df_with_another(df_pf, df_m, 'conId').drop(columns = ['wif_order', 'action', 'costPrice', 'mktVal'])
+
+    return df_pfm.drop(columns='order')
     
 
 async def cancel_all_api_orders(MARKET):
@@ -2057,6 +2174,114 @@ def sow_me(MARKET: str,
     logger.info(f"Sowed {len(success)} orders")
 
     return df
+
+
+# JOURNALING 
+# ==========
+
+def get_sowed_pickles(market_paths: list) -> dict:
+    """Assembles the pickles
+    market_paths: list of paths for a particular market"""
+
+
+    # get the dictionaries
+    ds = [get_pickle(mp) for mp in market_paths]
+
+    return ds
+
+
+def add_utc_times(ds: list, market_paths: list) -> list:
+    """Adds utc time"""
+
+    # get the times of the files
+    utc_times = [datetime.datetime.fromtimestamp(mp.stat().st_mtime, tz=datetime.timezone.utc) 
+                for mp in market_paths]
+
+    # add utc_times to ds (dictionaries)
+    for i, d in enumerate(ds):
+        d['utc_time'] = utc_times[i]
+
+    return ds
+
+
+def dicts2sorted_dfs(ds:list) -> list:
+    """Assemble dfs from sowed pickles"""
+
+    # ... extract the unique dictionary keys
+    d_keys = {k for d in ds for k, _ in d.items()}
+
+    result = []
+
+    for d in ds:
+
+        df_set = []
+
+        for k in d_keys:
+
+            obj = d[k]
+
+            if isinstance(obj, pd.DataFrame):
+                df_set.append(obj)
+            elif isinstance(obj, dict):
+                df_set.append(pd.DataFrame([obj]))
+            elif isinstance(obj, Union[bool, datetime.datetime]):
+                df_set.append(pd.DataFrame([{k:obj}]))
+            else:
+                logger.error(f"untreatable object type {type(obj)}")
+        
+        # gets df_sow first
+        dfs_sorted = sorted(df_set, key=len, reverse=True)
+
+        result.append(dfs_sorted)
+    
+    return result
+
+
+def join_dfs_by_columns(dfs_collection: list) -> pd.DataFrame:
+    """Joins a base df with single-row dfs
+    dfs_collection: collection of sorted dfs, with base df as the first one."""
+
+    dfs_collection = to_list(dfs_collection)
+    
+    all_dfs = []
+
+    for r in dfs_collection:
+
+        x = r[0] # the first df in the sorted df collection
+        rows = len(x)
+
+        dfs = [df for df in r[1:]] # remaining dfs
+
+        for df in dfs:
+            df = pd.concat([df] * rows, ignore_index=True)  # Repeat rows efficiently
+            x = x.join(df)
+
+        all_dfs.append(x)
+
+    # dfs2concat = [d for d in all_dfs if not d.empty]
+
+    df = pd.concat(all_dfs, axis=0, ignore_index=True)
+
+    return df
+
+
+def get_archived_sows(sow_path: Path, MARKET: str) -> pd.DataFrame:
+
+    """make dfs out of archved sows
+    sow_path: path where the sows exist
+    MARKET: 'NSE' | 'SNP' """
+
+    # get list of sow paths for the market
+    paths = glob.glob(str(sow_path / '*.pkl'))
+    market_paths = [Path(p) for p in paths if Path(p).parts[-1][:3] == MARKET]
+
+    ds = get_sowed_pickles(market_paths)
+    d = add_utc_times(ds, market_paths)
+    dfs = dicts2sorted_dfs(d)
+    df = join_dfs_by_columns(dfs)
+    return df
+
+
 
 
 

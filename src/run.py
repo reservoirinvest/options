@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-from utils import (build_base_without_pickling,
-                   get_sows_from_pickles, make_a_choice, sow_me, Timer)
+from utils import (Timer, build_base_without_pickling, get_sows_from_pickles,
+                   make_a_choice, sow_me, trade_extracts)
 
 if __name__ == "__main__":
 
@@ -35,9 +35,11 @@ if __name__ == "__main__":
     # ================
 
     action_choice_list = ["Cancel API open orders. Sow orders from scratch.",
+                          "Cancel API open orders. Sow orders from PICKLE and save sows.",
                           "Sow orders from pickle. Cancel API open orders. Don't save sows.",
                           "Build sow df from pickle. Don't order.",
-                          "Build sow df from scratch. Don't order or save pickles."]
+                          "Build sow df from scratch. Save base pickles. But don't order or save sows.",
+                          "Generate reports from IBKR portal statements and save."]
 
     action_header = "\nChoose a number for the action to be performed:\n"
     action_choice = make_a_choice(action_choice_list, action_header)
@@ -48,20 +50,29 @@ if __name__ == "__main__":
 
     match my_choice:
 
-        case 1: #Cancel API open orders. Sow orders from scratch.
+        case 0: # EXit
+            out = None
+
+        case 1: # Cancel API open orders. Sow orders from scratch.
             timer = Timer("Sow from scratch")
             timer.start()
             out = sow_me(MARKET=MARKET, build_from_scratch=True, save_sow=True)
             timer.stop()
 
-        case 2:# Sow orders from pickle. Cancel API open orders. Don't save sows.
+        case 2: # Cancel API open orders. Sow orders from PICKLE and save sows.
+            out = sow_me(MARKET=MARKET, build_from_scratch=False, save_sow=True)
+
+        case 3:# Sow orders from pickle. Cancel API open orders. Don't save sows.
             out = sow_me(MARKET=MARKET, build_from_scratch=False, save_sow=False)
 
-        case 3: # Build sow df from pickle. Don't order.
+        case 4: # Build sow df from pickle. Don't order.
             out = get_sows_from_pickles(MARKET, PAPER)
             
-        case 4: # Build base but DON'T SAVE PICKLES
+        case 5: # Build sow df from scratch. Save base pickles. But don't order or save sows
             out = build_base_without_pickling(MARKET, PAPER)
+
+        case 6: # Generate reports from IBKR portal statements and save.
+            out = trade_extracts(MARKET, True)
 
         case _: # Unknown case
             print(f"Unknown choice...\n")

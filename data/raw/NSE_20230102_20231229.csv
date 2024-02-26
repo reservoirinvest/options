@@ -1,0 +1,48 @@
+﻿Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers
+Statement,Data,Report Title,"Activity Statement January 1, 2023 - December 31, 2023"
+Statement,Data,-,(Capital Market Segment / Futures & Options Segment / Currency Derivatives Segment)
+Statement,Data,-,Interactive Brokers (India) Private Limited
+Statement,Data,-,MEMBER OF NATIONAL STOCK EXCHANGE OF INDIA LTD.
+Statement,Data,-,"SEBI Registration No. INZ000217730, Trading Member Code No. 12880"
+Statement,Data,-,Compliance Officer: Bina Shah; Contact: +91-22-61289800; Email: compliance.in@interactivebrokers.com
+Statement,Data,-,"Registered & Dealing Off: 502/A, Times Square, Andheri Kurla Road, Andheri East, Mumbai 400059"
+Statement,Data,-,Telephone: +91-22-61289888 Fax: +91-22-61289898
+Statement,Data,-,Email for investor grievances: help.in@interactivebrokers.com
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Exchange,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,INR,BANKBAROD 25JAN23 172.5 P,"2023-01-17, 02:08:05",-,"-5,850",0.9,0.9,5265,-29.5314437,-5235.4685563,0,0,O
+Trades,Data,Trade,Equity and Index Options,INR,BANKBAROD 25JAN23 172.5 P,"2023-01-17, 02:08:05",NSE,"-5,850",0.9,0.9,5265,-29.5314437,-5235.4685563,0,0,O
+Trades,Data,Order,Equity and Index Options,INR,BANKBAROD 25JAN23 172.5 P,"2023-01-25, 04:47:25",-,"5,850",2.3,2.75,-13455,-32.4342839,5235.468556,-8251.965728,2632.5,C
+Trades,Data,Trade,Equity and Index Options,INR,BANKBAROD 25JAN23 172.5 P,"2023-01-25, 04:47:25",NSE,"5,850",2.3,2.75,-13455,-32.4342839,5235.468556,-8251.965728,2632.5,C
+Trades,Data,ClosedLot,Equity and Index Options,INR,BANKBAROD 25JAN23 172.5 P,2023-01-17,,-5850,0.89495189,,,,-5235.468556,-8251.965728,,ST
+Trades,SubTotal,,Equity and Index Options,INR,BANKBAROD 25JAN23 172.5 P,,,0,,,-8190,-61.9657276,-0.0000003,-8251.965728,2632.5,
+Trades,Data,Order,Equity and Index Options,INR,HINDPETRO 28DEC23 407.5 C,"2023-12-28, 00:41:57",-,"-2,700",0.75,10.15,2025,-25.8906395,-1999.1093605,0,-25380,O
+Trades,Data,Trade,Equity and Index Options,INR,HINDPETRO 28DEC23 407.5 C,"2023-12-28, 00:41:57",NSE,"-2,700",0.75,10.15,2025,-25.8906395,-1999.1093605,0,-25380,O
+Trades,Data,Order,Equity and Index Options,INR,HINDPETRO 28DEC23 407.5 C,"2023-12-28, 04:15:17",-,"2,700",13.05,10.15,-35235,-42.4923023,1999.109361,-33278.382942,-7830,C;L
+Trades,Data,Trade,Equity and Index Options,INR,HINDPETRO 28DEC23 407.5 C,"2023-12-28, 04:15:17",NSE,"2,700",13.05,10.15,-35235,-42.4923023,1999.109361,-33278.382942,-7830,C;L
+Trades,Data,ClosedLot,Equity and Index Options,INR,HINDPETRO 28DEC23 407.5 C,2023-12-28,,-2700,0.740410874,,,,-1999.109361,-33278.382942,,ST
+Trades,SubTotal,,Equity and Index Options,INR,HINDPETRO 28DEC23 407.5 C,,,0,,,-33210,-68.3829418,0.0000005,-33278.382942,-33210,
+Trades,Data,Order,Equity and Index Options,INR,INDUSINDB 25JAN23 1160 P,"2023-01-17, 00:08:17",-,-450,5.95,5.05,2677.5,-26.61641795,-2650.88358205,0,405,O
+Trades,Data,Trade,Equity and Index Options,INR,INDUSINDB 25JAN23 1160 P,"2023-01-17, 00:08:17",NSE,-450,5.95,5.05,2677.5,-26.61641795,-2650.88358205,0,405,O
+Trades,Data,Order,Equity and Index Options,INR,INDUSINDB 25JAN23 1160 P,"2023-01-25, 04:49:39",-,450,6.4,3.85,-2880,-25.4909504,2650.883582,-254.607368,-1147.5,C
+Trades,Data,Trade,Equity and Index Options,INR,INDUSINDB 25JAN23 1160 P,"2023-01-25, 04:49:39",NSE,450,6.4,3.85,-2880,-25.4909504,2650.883582,-254.607368,-1147.5,C
+Trades,Data,ClosedLot,Equity and Index Options,INR,INDUSINDB 25JAN23 1160 P,2023-01-17,,-450,5.890852404,,,,-2650.883582,-254.607368,,ST
+Trades,SubTotal,,Equity and Index Options,INR,INDUSINDB 25JAN23 1160 P,,,0,,,-202.5,-52.10736835,-0.00000005,-254.607368,-742.5,
+Trades,Data,Order,Equity and Index Options,INR,MANAPPURA 23FEB23 99 P,"2023-02-08, 04:27:05",-,"-6,000",0.15,0.3,900,-24.613922,-875.386078,0,-900,O
+Trades,Data,Trade,Equity and Index Options,INR,MANAPPURA 23FEB23 99 P,"2023-02-08, 04:27:05",NSE,"-6,000",0.15,0.3,900,-24.613922,-875.386078,0,-900,O
+Trades,Data,Order,Equity and Index Options,INR,MANAPPURA 23FEB23 99 P,"2023-02-23, 07:00:00",-,"6,000",0,0,0,0,875.386078,875.386078,0,C;Ep
+Trades,Data,Trade,Equity and Index Options,INR,MANAPPURA 23FEB23 99 P,"2023-02-23, 07:00:00",--,"6,000",0,0,0,0,875.386078,875.386078,0,C;Ep
+Trades,Data,ClosedLot,Equity and Index Options,INR,MANAPPURA 23FEB23 99 P,2023-02-08,,-6000,0.14589768,,,,-875.386078,875.386078,,ST
+Trades,SubTotal,,Equity and Index Options,INR,MANAPPURA 23FEB23 99 P,,,0,,,900,-24.613922,0,875.386078,-900,
+Trades,Data,Order,Equity and Index Options,INR,RAMCOCEM 25JAN23 660 P,"2023-01-23, 04:59:43",-,"-1,700",1.35,1.15,2295,-26.1855011,-2268.8144989,0,340,O;P
+Trades,Data,Trade,Equity and Index Options,INR,RAMCOCEM 25JAN23 660 P,"2023-01-23, 04:59:43",NSE,-850,1.35,1.15,1147.5,-24.89275055,-1122.60724945,0,170,O;P
+Trades,Data,Trade,Equity and Index Options,INR,RAMCOCEM 25JAN23 660 P,"2023-01-23, 04:59:46",NSE,-850,1.35,1.15,1147.5,-1.29275055,-1146.20724945,0,170,O;P
+Trades,Data,Order,Equity and Index Options,INR,RAMCOCEM 25JAN23 660 P,"2023-01-25, 07:00:00",-,"1,700",0,0,0,0,2268.814498,2268.814498,0,C;Ep
+Trades,Data,Trade,Equity and Index Options,INR,RAMCOCEM 25JAN23 660 P,"2023-01-25, 07:00:00",--,"1,700",0,0,0,0,2268.814498,2268.814498,0,C;Ep
+Trades,Data,ClosedLot,Equity and Index Options,INR,RAMCOCEM 25JAN23 660 P,2023-01-23,,-1700,1.334596764,,,,-2268.814498,2268.814498,,ST
+Trades,SubTotal,,Equity and Index Options,INR,RAMCOCEM 25JAN23 660 P,,,0,,,2295,-26.1855011,-0.0000009,2268.814498,340,
+Trades,Total,,Equity and Index Options,INR,,,,,,,-38407.5,-233.25546085,-0.00000075,-38640.755462,-31880, 
+"Option Exercises, Assignments and Expirations",Headers,Type,Currency,Symbol,Date,Transaction Type,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,
+"Option Exercises, Assignments and Expirations",Data,Expirations,INR,RAMCOCEM 25JAN23 660 P,2023-01-25,Expiration,1700,0,0,0,0,2268.814498,2268.814498,0,
+"Option Exercises, Assignments and Expirations",Data,Expirations,INR,MANAPPURA 23FEB23 99 P,2023-02-23,Expiration,6000,0,0,0,0,875.386078,875.386078,0,
+"Option Exercises, Assignments and Expirations",Data,Total,,,,,,,,0,0,,3144.200576,0,

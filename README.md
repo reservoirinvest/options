@@ -28,17 +28,21 @@
 
 # Symbol `States` with colours.
 
+- 'tbd' : Unknown status of the position or order. [grey]
+
+- 'reaped' : An option position with a closing order. [purple]
 - 'unreaped' : A naked call or put option that doesn't have an open order to reap. [light-yellow]
-- 'uncovered': Ticker position present but with no covered call or put option and without any option open orders supporting it [yellow]
+
+- 'uncovered': A (long/short) stock with no covered (call/put) buy orders [yellow]
 
 - 'unsowed': No orders sown. No existing position. [white]
-- 'orphaned' : A long call or put option (positive) position that doesn't have an underlying position. [grey]
+- 'orphaned' : A long call or put option (positive) position that doesn't have an underlying position. [blue]
 
 - 'perfect': Ticker position present that is both covered and protected (or) Option position that is with a reap order. [green]
   
 
 - 'unprotected': Ticker position present but with no protective call or put option and without any option open orders [light-red]
-- 'imperfect': Ticker position present that has no cover or protection options and without any option open orders [purple]
+- 'imperfect': Ticker position present that has no cover or protection options and without any option open orders [light-brown]
   
 - 'sowing' : Naked Option orders present to be sowed. [blue]
 - 'covering' : Ticker position is protected with option but not covered and has option open orders to cover [cream]

@@ -58,6 +58,7 @@ NSE:
   MINEXPROM: 1.5
 
   MINOPTSELLPRICE: 0.25
+  MINOPTBUYPRICE: 0.05
 
   BLACKLIST: # Ref: https://zerodha.com/margin-calculator/SPAN/
   - FINNIFTY
@@ -87,6 +88,7 @@ SNP:
   MINEXPROM: 1.5
 
   MINOPTSELLPRICE: 0.5
+  MINOPTBUYPRICE: 0.02
   
 
   BLACKLIST:

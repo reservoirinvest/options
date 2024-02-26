@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import datetime
 import glob
 import logging
@@ -16,15 +17,17 @@ import pandas as pd
 import pandas_market_calendars as mcal
 import pytz
 import yaml
-# from data.master.dclass import OpenOrder
-from dclass import OpenOrder, Portfolio
 from from_root import from_root
-from ib_insync import IB, Contract, Index, LimitOrder, MarketOrder, Stock, Option, util
+from ib_insync import (IB, Contract, Index, LimitOrder, MarketOrder, Option,
+                       Stock, util)
 from loguru import logger
 from nsepython import fnolist, nse_get_fno_lot_sizes
 from pytz import timezone
 from scipy.integrate import quad
 from tqdm.asyncio import tqdm, tqdm_asyncio
+
+# from data.master.dclass import OpenOrder
+from dclass import OpenOrder, Portfolio
 
 ROOT = from_root()
 BAR_FORMAT = "{desc:<10}{percentage:3.0f}%|{bar}{r_bar}"
@@ -102,7 +105,6 @@ def to_list(data):
         return list(data)
     except TypeError:
         return [data]
-    
 
 
 async def isMarketOpen(MARKET: str) -> bool:
@@ -176,6 +178,17 @@ async def isMarketOpen(MARKET: str) -> bool:
     market_open = any(tframe["isopen"])
 
     return market_open
+
+
+def floatxtract(input: list):
+    """Extracts float from given list if possible"""
+
+    mixedList = re.split('( |, )', input )
+
+    out = next(iter([float(y) 
+                     for y in mixedList 
+                        if re.match(r'^-?\d+(?:\.\d+)$', y)]))
+    return out
 
 
 
@@ -453,15 +466,6 @@ def clean_ib_util_df(contracts: Union[list, pd.Series]) -> pd.DataFrame:
 
     """Cleans ib_insync's util.df to keep only relevant columns"""
 
-    # match contracts:
-    #     case list():
-    #         df1 = util.df(contracts)
-    #     case pd.Series():
-    #         df1 = util.df(list(contracts))
-    #     case _:
-    #         logger.error(f"cannot clean type: {type(contracts)}")
-    #         df1 = None
-
     df1 = pd.DataFrame([]) # initialize 
 
     if isinstance(contracts, list):
@@ -492,6 +496,32 @@ def clean_ib_util_df(contracts: Union[list, pd.Series]) -> pd.DataFrame:
     
 
     return df2
+
+
+def move_column(df, column_name, new_position):
+  """
+  Moves a column to a specific position in a DataFrame.
+
+  Args:
+      df: The DataFrame to modify.
+      column_name: The name of the column to move.
+      new_position: The desired position for the column.
+
+  Returns:
+      A new DataFrame with the column moved to the specified position.
+  """
+  # Ensure modifications are done on a copy to prevent unintended changes
+  new_df = df.copy()
+  
+  # Check if column exists
+  if column_name not in new_df.columns:
+    raise ValueError(f"Column '{column_name}' not found in DataFrame.")
+
+  # Pop and insert the column
+  col = new_df.pop(column_name)
+  new_df.insert(new_position, column_name, col)
+
+  return new_df
 
 
 def get_closest_values(myArr: list, 
@@ -933,20 +963,31 @@ def make_target_option_contracts(df_target: list, MARKET: str):
     return option_contracts
 
 
-def make_equity_contracts(symbols: list, MARKET: str):
-
-    symbols = to_list(symbols)
+def make_ib_contracts(symbols: Union[list, set], MARKET: str, secType: str = 'STK'):
 
     """makes equity contracts from a symbol list"""
 
-    EXCHANGE = 'NSE' if MARKET.upper() == 'NSE' else 'SMART'
+    symbols = to_list(symbols)
 
-    contracts = [Contract(
-            symbol=symbol,
-            exchange=EXCHANGE,
-            currency= 'USD' if MARKET.upper() == 'SNP' else 'INR',
-            secType='STK')
-        for symbol in symbols]
+    symbols = pd.Series(symbols, name='symbol')
+
+    ROOT = from_root()
+    DATAPATH = ROOT / 'data' / MARKET.lower()
+
+    und_dict = get_pickle(DATAPATH / 'unds.pkl')
+
+    if und_dict:
+        contracts = [und_dict.get(s, None) for s in symbols]
+
+    else:
+        EXCHANGE = 'NSE' if MARKET.upper() == 'NSE' else 'SMART'
+
+        contracts = [Contract(
+                symbol=symbol,
+                exchange=EXCHANGE,
+                currency= 'USD' if MARKET.upper() == 'SNP' else 'INR',
+                secType=secType)
+            for symbol in symbols]
     
     return contracts
 
@@ -1083,10 +1124,12 @@ async def get_prices_as_tickers(ib:IB,
                          chunk_size: int=44):
     """[async] Gets option prices"""
 
+    contracts = to_list(contracts)
+
     results = []
 
     pbar = tqdm(total=len(contracts),
-                desc="Getting option prices:",
+                desc="Getting contract prices:",
                 bar_format = BAR_FORMAT,
                 ncols=80,
                 leave=True,
@@ -1096,7 +1139,7 @@ async def get_prices_as_tickers(ib:IB,
 
     for cts in chunks:
 
-        tasks = [asyncio.create_task(get_tick_data(ib, contract), name= contract.localSymbol) 
+        tasks = [asyncio.create_task(get_tick_data(ib, contract), name = contract.localSymbol) 
                 for contract in cts]
     
         ticks = await asyncio.gather(*tasks)
@@ -1119,39 +1162,45 @@ async def get_prices_with_ivs(port: int,
 
     try:
         contracts = input_contracts.contract.to_list()
+        df_cts = input_contracts # defaults to the input df to save columns like sdev
     except AttributeError:
-        input_contracts = clean_ib_util_df(input_contracts)
-        contracts = input_contracts.contract.to_list()
-
+        contracts = to_list(input_contracts)
+        df_cts = clean_ib_util_df(contracts)
+    
     with await IB().connectAsync(port=port, clientId=CID) as ib:
 
-        opt_prices = await get_prices_as_tickers(ib, contracts)
+        ct_prices = await get_prices_as_tickers(ib, contracts)
 
-    df_opt_prices = util.df(opt_prices)
-    opt_cols = ['contract', 'time', 'bidSize', 'askSize', 'lastSize', 
+    df_prices = util.df(ct_prices)
+    cols = ['contract', 'time', 'bidSize', 'askSize', 'lastSize', 
     'volume', 'high', 'low', 'bid', 'ask', 'last', 'close']
 
-    df_opts = df_opt_prices[opt_cols]
-    duplicated_columns = [col for col in input_contracts.columns if col in df_opts.columns]
+    df_ps = df_prices[cols]
 
-    df = input_contracts.join(df_opts.drop(duplicated_columns, axis=1))
+    # duplicated_columns = [col for col in df_cts.columns if col in df_ps.columns]
+    # df = df_cts.join(df_ps.drop(duplicated_columns, axis=1))
+    df = df_cts.merge(df_ps)
 
     greek_cols = [ 'undPrice', 'impliedVol', 'delta', 'gamma',
     'vega', 'theta', 'optPrice']
 
     try:
-        model_df= util.df(list(util.df(opt_prices).modelGreeks.values))[greek_cols]
+        model_df= util.df(list(util.df(ct_prices).modelGreeks.values))[greek_cols]
     except TypeError:
         pass # ignore adding Greeks
     else:
-        ask_df = util.df(list(util.df(opt_prices).askGreeks.values))[greek_cols]
-        bid_df = util.df(list(util.df(opt_prices).bidGreeks.values))[greek_cols]
+        ask_df = util.df(list(util.df(ct_prices).askGreeks.values))[greek_cols]
+        bid_df = util.df(list(util.df(ct_prices).bidGreeks.values))[greek_cols]
 
         df = df.join(model_df, lsuffix='Model').\
                     join(ask_df, lsuffix='Ask').\
                         join(bid_df, lsuffix='Bid')
     
-    # puts optPrice column, if not in df
+    # add secType
+    secType = [c.secType for c in df.contract]
+    df = df.assign(secType = secType)
+    
+    # puts optPrice / price column, if not in df
     df = arrange_prices(df, HIGHEST)
 
     return df
@@ -1198,6 +1247,10 @@ def arrange_prices(df: pd.DataFrame,
 
     # replace optPrice of df with cleansed optPrice
     df = df.assign(optPrice = optPrice)
+
+    # for stock contracts replace optprice to price
+    if 'OPT' not in df.secType.unique():
+        df.rename(columns={'optPrice': 'price'}, inplace=True)
 
     return df
 
@@ -1282,8 +1335,7 @@ async def get_margins(port: int,
                       orders: Union[pd.Series, list, MarketOrder, None]=None,                      
                       lots_path: Path=None,
                       ACTION: str='SELL', 
-                      chunk_size: int=100,
-                      CID: int=0):
+                      chunk_size: int=100):
     """
     [async] Gets margins for options contracts with `orders` or `ACTION`
 
@@ -1333,7 +1385,7 @@ async def get_margins(port: int,
 
     chunks = chunk_me(cos, chunk_size)
 
-    with await IB().connectAsync(port=port, clientId=CID) as ib:
+    with await IB().connectAsync(port=port) as ib:
         
         for cts in chunks:
 
@@ -1381,7 +1433,14 @@ def create_target_opts(market: str) -> pd.DataFrame:
     df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
 
     # remove NaN's with a commission value
-    df_naked_targets.comm.fillna(df_naked_targets.comm.dropna().unique()[0], inplace=True) 
+    df_naked_targets.comm.fillna(df_naked_targets.comm.dropna().unique()[0], inplace=True)
+
+    # add DTE
+    df_naked_targets = df_naked_targets.assign(dte = df_naked_targets.expiry.apply(lambda x: get_dte(x, MARKET)))
+    # df_naked_targets.insert(4, 'dte', df_naked_targets.expiry.apply(lambda x: get_dte(x, MARKET)))
+
+    # make multiplier an integer
+    df_naked_targets.multiplier = df_naked_targets.multiplier.astype('int')
 
     # Get precise expected prices
     xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
@@ -1750,7 +1809,7 @@ def build_base(market: str,
                                                  lots_path=None))
     pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
 
-    # Get alll the options
+    # Get all the options
     df_naked_targets = create_target_opts(market=MARKET)
     pickle_with_age_check(df_naked_targets, naked_targets_path, 0)
 
@@ -1815,7 +1874,7 @@ def pickle_the_sow(df: pd.DataFrame,
 
     dt = datetime.datetime.now().strftime("_%I_%M_%p_on_%d-%b-%Y")
     file_name = "".join([MARKET,'_sow', dt , '.pkl'])
-    TEMP_SOW_PATH = DATAPATH.parent / 'ztemp' / file_name
+    TEMP_SOW_PATH = DATAPATH.parent / 'raw' / file_name
 
     # Get config variables
     vars_d = _vars.__dict__
@@ -2017,8 +2076,7 @@ def get_portfolio_with_margins(MARKET: str) -> pd.DataFrame:
     contracts = to_list(pf_contracts)
     orders = df_pf.wif_order.to_list()
 
-    with IB().connect(port=PORT) as ib:
-        df_m = asyncio.run(get_margins(port=PORT, contracts=contracts, orders = orders))
+    df_m = asyncio.run(get_margins(port=PORT, contracts=contracts, orders = orders))
 
     df_pfm = join_my_df_with_another(df_pf, df_m, 'conId').drop(columns = ['wif_order', 'action', 'costPrice', 'mktVal'])
 
@@ -2176,8 +2234,8 @@ def sow_me(MARKET: str,
     return df
 
 
-# JOURNALING 
-# ==========
+# JOURNALING & REPORT EXTRACTION
+# ==============================
 
 def get_sowed_pickles(market_paths: list) -> dict:
     """Assembles the pickles
@@ -2282,7 +2340,317 @@ def get_archived_sows(sow_path: Path, MARKET: str) -> pd.DataFrame:
     return df
 
 
+def local2symbols(syms: Union[pd.Series, list]) -> pd.DataFrame:
+    """Converts to df with symbol, expiry, strike, right.
 
+    Note:
+    ---
+     - This is used only for reports generated in IBKR portal"""
+    
+    # Needed to rectify space between BRK and B
+    
+    def correct_symbols_with_a_gap(text: str) -> str:
+        """Corrects `BRK B`"""
+
+        # new_text = copy.deepcopy(text)
+        new_text = text
+
+        t_split = text.split(' ')
+        if len(t_split) > 1:
+            if not t_split[1][-1].isdigit():
+                new_text = ''.join(t_split[:2]) + ' ' + ' '.join(t_split[2:])
+
+        return new_text
+    
+    slist = [correct_symbols_with_a_gap(s) for s in syms]
+
+    s_series = pd.Series(slist, name='localSymbol')
+
+    split_syms = s_series.str.split(' ').copy(deep=True)
+
+    symbols = [s[0] if len(s) > 1 else s[0] for s in split_syms]
+    expiries = [pd.to_datetime(s[1], dayfirst=True).date() if len(s) > 1 else pd.NaT for s in split_syms]
+    strikes = [float(s[2]) if len(s) > 1 else np.nan for s in split_syms]
+    rights = [s[3] if len(s) > 1 else '' for s in split_syms]
+
+    df = pd.DataFrame({"symbol": symbols,
+                       "expiry": expiries,
+                       "strike": strikes,
+                       "right": rights})
+    
+    return df
+
+
+def clean_df_positions(df_posn: pd.DataFrame) -> pd.DataFrame:
+    """Cleans up df_position dataframe
+
+    Note:
+    ---
+     - This is used only for reports generated in IBKR portal
+    
+    """
+
+    df_posn.insert(0, 'xnType', 'position')
+
+    secType = np.where(df_posn['Asset Category'] == 'Stocks', 'STK', 'OPT')
+    df_posn.insert(1, 'secType', secType)
+    df_pos = df_posn.drop(columns = 
+                        ['Open Positions', 'Header', 'DataDiscriminator', 'Unrealized P/L',
+                                    'Mult', 'Asset Category', 'Cost Basis', 'Value'])
+
+    pos_cols = {'Currency': 'currency',
+    'Symbol': 'localSymbol',
+    'Open': 'time',
+    'Quantity': 'qty',
+    'Cost Price': 'cost',
+    'Close Price': 'price',
+    'Code': 'code'
+    }
+    df_pos = df_pos.rename(columns=pos_cols)
+
+    # standardize the time
+    df_pos.time = pd.to_datetime(df_pos.time)
+
+    # get multiplier for option quantities
+    mult = np.where((df_pos.currency == 'USD') & (df_pos.secType == 'OPT') & (df_pos.qty.astype('float').abs() == 1), 100, 1)
+    insert_mult_at = list(df_pos.columns).index('qty') + 1
+    df_pos.insert(insert_mult_at, 'mult', mult)
+
+    # generate trade pnl
+    num_cols = ['qty', 'mult', 'price', 'cost']
+    df_pos[num_cols] = df_pos[num_cols].apply(pd.to_numeric)
+
+    df_pos = df_pos.assign(pnl= (df_pos.price - df_pos.cost)*df_pos.qty*df_pos.mult,
+                           exchange= "--")
+
+    # integrate
+    df_pos = local2symbols(df_pos.localSymbol).join(df_pos)
+
+    df_pos = df_pos.sort_values(['symbol', 'time'])
+
+    return df_pos
+
+
+def clean_df_trades(df: pd.DataFrame) -> pd.DataFrame:
+    """Cleans up trade entries in ibkr portal report    
+    """
+
+    df.insert(0, 'xnType', 'trade')
+    secType = np.where(df.Symbol.str.len() > 9, 'OPT', 'STK')
+    df.insert(1, 'secType', secType)
+
+    trade_cols = {'Currency': 'currency',
+        'Symbol': 'localSymbol',
+        'Date/Time': 'time',
+        'Date': 'time',
+        'Exchange': 'exchange',
+        'Quantity': 'qty',
+        'C. Price': 'cost',
+        'T. Price': 'price',
+        'Comm/Fee': 'commission',
+        'Code': 'code',
+        'Type': 'code'
+        }
+    
+    drop_cols = ['Trades', 'Header', 'DataDiscriminator',
+                'Asset Category', 'Proceeds', 'Basis', 
+                'Realized P/L', 'MTM P/L', 'Option Exercises, Assignments and Expirations',
+                'Headers', 'Transaction Type'
+                ]
+    df = df.drop(columns=drop_cols, errors='ignore', axis=1)
+
+    df.rename(columns=trade_cols, inplace=True)
+
+    # standardize the time
+    df.time = pd.to_datetime(df.time, format='mixed', yearfirst=True)
+
+    # integrate
+    df = local2symbols(df.localSymbol).join(df)
+
+    # get multiplier for option quantities
+    df.qty = pd.to_numeric(df.qty.str.replace(',', '')).astype('float')
+    mult = np.where((df.currency == 'USD') & (df.secType == 'OPT') & (df.qty.astype('float').abs() == 1), 100, 1)
+    insert_mult_at = list(df.columns).index('qty') + 1
+    df.insert(insert_mult_at, 'mult', mult)
+
+    # generate trade pnl
+    num_cols = ['qty', 'mult', 'price', 'cost', 'commission']
+    df[num_cols] = df[num_cols].apply(pd.to_numeric)
+
+    df = df.assign(pnl= (df.price - df.cost)*df.qty.abs()*df.mult+df.commission)
+
+    # organize the symbols
+    df = df.sort_values(['symbol', 'time', 'secType'], ascending=[True, True, True])\
+            .reset_index(drop=True)
+    
+    return df
+
+
+def clean_df_dividends(df: pd.DataFrame) -> pd.DataFrame:
+
+    """Cleans dividend file extracted from IBKR portal"""
+
+    div_cols = {"Currency": "currency",
+                "Date": "time",
+                "Description": "desc",
+                "Amount": "amt"}
+
+    df = df.rename(columns=div_cols)
+
+    # remove smallcase columns (not in div_cols)
+    keep_div_cols = [c for c in df.columns if c.islower()]
+    df = df[keep_div_cols]
+
+    # insert symbols
+    symbols = df.desc.str.split('(').str[0]
+    df.insert(0, 'symbol', symbols)
+
+    df = df.assign(dividend=df.desc.apply(floatxtract))
+    df = df.assign(time = pd.to_datetime(df.time), 
+                    amt = pd.to_numeric(df.amt))
+
+    return df
+
+
+def clean_an_ib_portal_report(market_path: Path) -> dict:
+    """Cleans an IB portal extract
+    market_path: pathlib.Path has the csv to be cleaned"""
+
+    # put col nammes in csv to prevent old reports from failing
+    col_names = ['col'+str(i) for i in range(1, 20)]
+
+    try:
+        data = pd.read_csv(market_path, names=col_names)
+    except FileNotFoundError:
+        logging.error(f"File {market_path} not found.")
+        return None
+        
+    statement_types = data.col1.unique()
+
+    # make the dicts
+    df_dicts = dict()
+    remove_list = ['Statement', 'Header', 'Summary', 'Total', 'Order', 'SubTotal', 'ClosedLot']
+
+    for s in statement_types:
+        d = data[data.col1 == s].reset_index(drop=True)
+
+        # column names as the first row
+        d.columns = d.iloc[0]
+
+        # remove columns with NaN
+        d = d.loc[:, d.columns.notna()]
+
+        # remove rows containing items from remove list
+        d = d[~d.isin(remove_list).any(axis=1)]
+
+        # remove the first row
+        d = d[1:]
+        
+        # clearn approrpriately
+        match s:
+            case 'Open Positions':
+                s = 'positions'
+                df_posn = d.copy(deep=True).reset_index(drop=True)
+                d = clean_df_positions(df_posn)
+
+            case 'Trades':
+                s = 'trades'
+                df_trades = d.copy(deep=True).reset_index(drop=True)
+                d = clean_df_trades(df_trades)
+
+            case 'Option Exercises, Assignments and Expirations':
+                s = 'expass'
+                df = d.copy(deep=True).reset_index(drop=True)
+                d = clean_df_trades(df)
+
+            case 'Dividends':
+                s = 'dividends'
+                df = d.copy(deep=True).reset_index(drop=True)
+                d = clean_df_dividends(df)
+
+        year = int(market_path.parts[-1][4:8])
+        d.insert(0, 'year', year)           
+
+        df_dicts[s] = d
+
+    # remove empty df from dictionary
+    dfs = {k:v for k, v in df_dicts.items() if not v.empty}
+
+    return dfs
+
+
+
+def trade_extracts(MARKET: str, save: bool=False):
+    """
+    Generate position, trades and dividends `all_dicts` from ibkr history
+    - Go to `Performance & Reports` -> `Custom Statements` -> `history`. 
+    - `history` has `Open Positions`, `Option Exercises/Assignments`, `Trades` and `Dividends` selected
+    - Choose to remove account number from the CSV file
+    - Ensure `Hide Details for Positions, Trades and Client Fees Sections?` is a `NO`
+    - Choose `csv` with `daily` and appropriate `Custom Date Range`. Max is 365 days. 
+    
+    - Recast the file name to `<MARKET>_<DATE_FROM>_<DATE_TO>.csv`. e.g. `SNP_20230102_20231229.csv`
+    - Move the files to `<root>/data/raw` folder
+    - Run the function
+
+    - Date format in `Symbol` field is assumed to be `%d%m%y`
+    """
+
+    ROOT = from_root()
+    RAWPATH = ROOT / 'data' / 'raw'
+    filename =  MARKET.lower() + '_ib_reports.pkl'
+    SAVEPATH = ROOT / 'data' / 'master' / filename
+
+    # get the respective files
+    paths = glob.glob(str(RAWPATH / '*.csv'))
+    market_paths = [Path(p) for p in paths if Path(p).parts[-1].split('_')[0] == MARKET]
+
+    all_dicts = []
+
+    for market_path in market_paths:
+
+        result = clean_an_ib_portal_report(market_path)
+
+        all_dicts.append(result)
+
+    positions = []
+    trades =  []
+    expass = []
+    dividends = []
+
+    for r in all_dicts:
+        for k, v in r.items():
+            match k:
+                case 'positions':
+                    positions.append(v)
+                case 'trades':
+                    trades.append(v)
+                case 'expass':
+                    expass.append(v)
+                case 'dividends':
+                    dividends.append(v)
+                case _:
+                    logger.error(f"Unknown DataFrame {v.head()}")
+
+    xn = dict()
+
+    if trades:
+        df_trades  = pd.concat(trades, ignore_index=True)
+        xn['trades'] = df_trades
+    if positions:
+        df_positions  = pd.concat(positions, ignore_index=True)
+        xn['positions'] = df_positions
+    if expass:
+        df_expass  = pd.concat(expass, ignore_index=True)
+        xn['expass'] = df_expass
+    if dividends:
+        df_dividends  = pd.concat(dividends, ignore_index=True)
+        xn['dividends'] = df_dividends
+
+    if save:
+        pickle_me(xn, SAVEPATH)
+
+    return xn
 
 
 if __name__ == "__main__":

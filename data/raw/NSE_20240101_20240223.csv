@@ -375,7 +375,7 @@ Trades,Data,Order,Equity and Index Options,INR,ZEEL 25JAN24 190 C,"2024-01-25, 0
 Trades,Data,Trade,Equity and Index Options,INR,ZEEL 25JAN24 190 C,"2024-01-25, 07:00:00",--,"3,000",0,0,0,0,1924.018699,1924.018699,0,C;Ep
 Trades,Data,ClosedLot,Equity and Index Options,INR,ZEEL 25JAN24 190 C,2024-01-23,,-3000,0.641339566,,,,-1924.018699,1924.018699,,ST
 Trades,SubTotal,,Equity and Index Options,INR,ZEEL 25JAN24 190 C,,,0,,,1950,-25.981301,0,1924.018699,-150,
-Trades,Total,,Equity and Index Options,INR,,,,,,,136759.95,-2129.73306161,-81334.53307322,53295.683866,23552.45, 
+Trades,Total,,Equity and Index Options,INR,,,,,,,136759.95,-2129.73306161,-81334.53307322,53295.683866,23552.45,
 "Option Exercises, Assignments and Expirations",Headers,Type,Currency,Symbol,Date,Transaction Type,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,
 "Option Exercises, Assignments and Expirations",Data,Expirations,INR,BANKNIFTY 17JAN24 46700 C,2024-01-17,Expiration,15,0,0,0,0,216.247317,216.247317,0,
 "Option Exercises, Assignments and Expirations",Data,Expirations,INR,BANKNIFTY 17JAN24 45900 P,2024-01-17,Expiration,15,0,0,0,0,231.237774,231.237774,0,

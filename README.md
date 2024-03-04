@@ -12,8 +12,15 @@
 - [x] Make functions for `cancel_api_ords`
 - [x] Make function for `cancel_ords` in which you can give the specific orders.    
     -- replace sow_me's `cancel_api_ords` with `cancel_ords` only for equity position open orders.
-- [ ] Make function for getting status of a symbol (See `Symbol Statuses` below)
-- [ ] place closing orders for existing `reap`
+- [x] Make function to extract info from IBKR portal reports
+- [ ] Make rule of 25 for `computed margins` of option chain
+- [ ] Make a function to limit number of naked orders per symbol with `MAXNAKEDORD`.
+- [ ] Generate symbol `state`s (see below)
+
+- [ ] Place closing orders for `unreaped` options
+- [ ] Place opening `cover` orders for equity positions\
+
+- [ ] Make function to consolidate successful `sows` 
 
 # For SNP
 
@@ -23,8 +30,33 @@
 - [ ] Every short stock should have a covered put in next week's expiry and protective call in 3 months
 - [ ] Every symbol should have its own standard deviations for naked sows, covers and protections
 
+## Margin Calculation
+
+Initial Margin
+* 30% * Market Value of Stock, if Stock Value > $16.67 per share  
+* \$5.00 per share, if Stock Value < \$16.67 and > $5.00   
+* 100% of Market Value of Stock, if Stock Value < $5.00   
+* \$2.50 per share, if Stock Value <= $2.50   
+
+Maintenance Margin is the same as Initial Margin   
+
+Check https://www.interactivebrokers.com/en/trading/margin-stocks.php
+
 # For NSE
 - [ ] Every sowed option should have a closing order that reaps
+
+## Margin Calculation
+
+All securities are classified into three groups for the purpose of VaR margin 
+
+For the securities listed in Group I, scrip wise daily volatility calculated using the exponentially weighted moving average methodology is applied to daily returns. The scrip wise daily VaR is 6 times the volatility so calculated subject to a minimum of 9%. 
+For the securities listed in Group II, scrip wise daily VaR is 6 times the volatility so calculated subject to a minimum of 21.5%. 
+For the securities listed in Group III the VaR margin is 50% if traded at least once per week on any stock exchange; 75% otherwise. In case of Group III the securities shall be monitored on a weekly basis, and the VaR margin rates shall be increased to 75% if the security has not traded for a week. In case the VaR margin rate is 75% and the security trades during the day, the VaR margin rate shall be revised to 50% from start of next trading day 
+
+### Notes:
+URL for fnolist - https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O
+URL for Group Type: https://nsearchives.nseindia.com/content/nsccl/C_CATG.T01
+Check this link out for how to do it: https://stackoverflow.com/a/39213616
 
 # Symbol `States` with colours.
 

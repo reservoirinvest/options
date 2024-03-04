@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["cross_platform"]
 lock_version = "4.4.1"
-content_hash = "sha256:eddd9cc22b7bd05eae7a71c509f7516a4178e62ad51715253dc5de23927b87ae"
+content_hash = "sha256:5dd8ca11158ad48224dabea2e91536f478d6e03fdd9de5775eb1b85c35ebe43f"
 
 [[package]]
 name = "anyio"
@@ -1965,6 +1965,16 @@ summary = "Traitlets Python configuration system"
 files = [
     {file = "traitlets-5.12.0-py3-none-any.whl", hash = "sha256:81539f07f7aebcde2e4b5ab76727f53eabf18ad155c6ed7979a681411602fa47"},
     {file = "traitlets-5.12.0.tar.gz", hash = "sha256:833273bf645d8ce31dcb613c56999e2e055b1ffe6d09168a164bcd91c36d5d35"},
+]
+
+[[package]]
+name = "tuna"
+version = "0.5.11"
+requires_python = ">=3.6"
+summary = "Visualize Python performance profiles"
+files = [
+    {file = "tuna-0.5.11-py3-none-any.whl", hash = "sha256:ab352a6d836014ace585ecd882148f1f7c68be9ea4bf9e9298b7127594dab2ef"},
+    {file = "tuna-0.5.11.tar.gz", hash = "sha256:d47f3e39e80af961c8df016ac97d1643c3c60b5eb451299da0ab5fe411d8866c"},
 ]
 
 [[package]]

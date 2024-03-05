@@ -149,7 +149,7 @@ async def isMarketOpen(MARKET: str) -> bool:
             ct = await ib.qualifyContractsAsync(
                 Stock(symbol="INTC", exchange="SMART", currency="USD"))
         else:
-            print(f"\nUnknown market {MARKET}!!!\n")
+            print(f"\nUnknown market {MARKET}!\n")
             return None
 
         ctd = await ib.reqContractDetailsAsync(ct[0])
@@ -524,7 +524,7 @@ def pickle_with_age_check(obj: dict,
         logger.info(f"Not pickled as {file_name_with_path}'s age {existing_file_age.days} is < {minimum_age_in_days}")
 
 
-def get_pickle(path: Path):
+def get_pickle(path: Path, print_msg: bool=True):
     """Gets pickled object"""
 
     output = None # initialize
@@ -533,7 +533,8 @@ def get_pickle(path: Path):
         with open(path, 'rb') as f:
             output = pickle.load(f)
     except FileNotFoundError:
-        logger.error(f"file not found: {path}")
+        if print_msg:
+            logger.error(f"file not found: {path}")
     
     return output
 
@@ -601,7 +602,7 @@ async def qualify_conIds(PORT: int,
     return qualified_opts
 
 
-def get_lots(contract, lots_path: Union[Path, None]=None):
+def get_lots(contract):
     """
     Retrieves lots based on contract.
 
@@ -612,38 +613,35 @@ def get_lots(contract, lots_path: Union[Path, None]=None):
     Returns:
         The lots. If no match found returns None.
     """
-    if lots_path:
-        lots = get_pickle(lots_path) # lots dictionary from nse path
+
+    MARKET = contract.exchange.upper()
+    DATAPATH = ROOT / 'data' / MARKET.lower()
+
+    lots = get_pickle(DATAPATH / 'lots.pkl') if MARKET == 'NSE' else None
 
     match (contract.secType, contract.exchange):
         
+        # Gets the lots of NSE options
         case ('OPT', 'NSE'):
+            output = lots.get(contract.symbol, None)
 
-            # Gets the lots of NSE options
-            if not lots_path:
-                # logger.info(f"No lots_path provided for NSE: {contract.localSymbol}")
-                return None
-            else:
-                return lots.get(contract.symbol, None)
-
+        # Lots for SNP options
         case ('OPT', 'SMART'):
-            return 1
+            output = 1
 
+        # Any exchange other than 'NSE' for options
+        case ('OPT', _):  
+            output = 1
         
-        case ('OPT', _):  # Any exchange other than 'NSE' for options
-            return 1
+        # Any security type on the 'NSE' exchange other than options
+        case (_, 'NSE'):
+            output = lots.get(contract.symbol, None)
         
-        case (_, 'NSE'):  # Any security type on the 'NSE' exchange other than options
+        # Any other combination (non-options on non-'NSE' exchanges)
+        case (_, _):  
+            output = 100
 
-            if not lots_path:
-                logger.info(f"No lots_path provided for NSE: {contract.localSymbol}")
-                return None
-            else:
-                return lots.get(contract.symbol, None)
-        
-        case (_, _):  # Any other combination (non-options on non-'NSE' exchanges)
-
-            return 100
+    return output
         
 
 def clean_ib_util_df(contracts: Union[list, pd.Series]) -> pd.DataFrame:
@@ -867,12 +865,10 @@ def build_base(market: str,
     # Get the option margins
     if MARKET == 'NSE':
         df_opt_margins = asyncio.run(get_margins(port=PORT, 
-                                                 contracts=df_all_qualified_options, 
-                                                 lots_path=lots_path))
+                                                 contracts=df_all_qualified_options,))
     else: # no need for lots_path
         df_opt_margins = asyncio.run(get_margins(port=PORT, 
-                                                 contracts=df_all_qualified_options,
-                                                 lots_path=None))
+                                                 contracts=df_all_qualified_options,))
     pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
 
     # Get all the options
@@ -1253,9 +1249,13 @@ async def get_an_option_chain(ib: IB, contract:Contract, MARKET: str):
     underlyingConId=contract.conId,
     )
 
-    chain = chain[-1] if isinstance(chain, list) else chain
+    # print(f"chain for {contract.symbol} is {chain}") # !!! TEMP
 
-    df = chain_to_df(chain, contract, MARKET)
+    if chain:
+        chain = chain[-1] if isinstance(chain, list) else chain
+        df = chain_to_df(chain, contract, MARKET)
+    else:
+        df = pd.DataFrame([])
 
     return df
 
@@ -1294,10 +1294,11 @@ async def combine_a_chain_with_stdev(ib: IB, contract, MARKET: str, sleep: float
 
     chain = await get_an_option_chain(ib, contract, MARKET)
     
-    df = chain.assign(localSymbol=contract.localSymbol, undPrice=undPrice, iv=iv, multiplier=contract.multiplier)
-
-    # df = compute_sdev_right(df=df)
-    df = compute_strike_sd_right(df=df)
+    if not chain.empty:
+        df = chain.assign(localSymbol=contract.localSymbol, undPrice=undPrice, iv=iv, multiplier=contract.multiplier)
+        df = compute_strike_sd_right(df=df)
+    else:
+        df = pd.DataFrame([])
 
     return df
 
@@ -1312,6 +1313,8 @@ async def make_chains(port: int,
     """[async] Makes chains for a list of contracts. 2m 11s for 186 contracts.\n
     ...for optimal off-market, chunk-size of 25 and sleep of 7 seconds."""
 
+    contracts = to_list(contracts)
+
     with await IB().connectAsync(port=port, clientId=CID) as ib:
 
         chunks = tqdm(chunk_me(contracts, chunk_size), desc="Getting chains")
@@ -1321,7 +1324,9 @@ async def make_chains(port: int,
 
             tasks = [asyncio.create_task(combine_a_chain_with_stdev(ib=ib, contract=c, MARKET=MARKET, sleep=sleep)) for c in cts]
 
-            results = await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # clean_res = [r for r in results if not r.empty]
 
             df = pd.concat(results, ignore_index=True)
 
@@ -1658,7 +1663,6 @@ def clean_a_margin(wif, conId):
 async def get_a_margin(ib: IB, 
                        contract,
                        order: Union[MarketOrder, None]=None,
-                       lots_path: Path=None,
                        ACTION: str='SELL',
                        ) -> dict:
     
@@ -1669,10 +1673,12 @@ async def get_a_margin(ib: IB,
 
     Gives negative margin for `BUY` trades"""
 
-    if lots_path: # For NSE
-        lot_size = get_lots(contract, lots_path)
-    else:
-        lot_size = get_lots(contract)
+    # if lots_path: # For NSE
+    #     lot_size = get_lots(contract, lots_path)
+    # else:
+    #     lot_size = get_lots(contract)
+
+    lot_size = get_lots(contract)
 
     if not order: # Uses ACTION instead of order
         order = MarketOrder(ACTION, lot_size)
@@ -1708,12 +1714,10 @@ async def get_a_margin(ib: IB,
 
 async def get_margins(port: int, 
                       contracts: Union[pd.DataFrame, pd.Series, list, Contract],
-                      orders: Union[pd.Series, list, MarketOrder, None]=None,                      
-                      lots_path: Path=None,
+                      orders: Union[pd.Series, list, MarketOrder, None]=None,
                       ACTION: str='SELL', 
                       chunk_size: int=100):
     """
-    TODO: Remove lots_path dependence
 
     [async] Gets margins for options contracts with `orders` or `ACTION`
 
@@ -1769,8 +1773,7 @@ async def get_margins(port: int,
             tasks = [asyncio.create_task(get_a_margin(ib=ib, 
                                                         contract=contract,
                                                         order=order,
-                                                        ACTION=ACTION,
-                                                        lots_path=lots_path), 
+                                                        ACTION=ACTION,), 
                                                         name= contract.localSymbol) 
                         for contract, order in cts]        
 
@@ -1847,9 +1850,12 @@ def nse2ib(nselist: list, as_dict: bool = False) -> Union[list, dict]:
     return ib_fnos
 
 
-def make_nse_lots() -> dict:
+def make_nse_lots(save: bool=True) -> dict:
 
     """Makes lots for NSE on cleansed IB symbols without BLACKLIST"""
+
+    MARKET = 'NSE'
+    DATAPATH = ROOT / 'data' / MARKET.lower()
 
     url = "https://archives.nseindia.com/content/fo/fo_mktlots.csv"
 
@@ -1881,7 +1887,7 @@ def make_nse_lots() -> dict:
     result = {nse2ibsymdict[k]: v for k, v in res_dict.items()}
 
     # remove BLACKLIST
-    BLACKLIST = Vars('NSE').BLACKLIST
+    BLACKLIST = Vars(MARKET).BLACKLIST
 
     clean_lots = {k: v for k, v 
                     in result.items() 
@@ -1890,6 +1896,9 @@ def make_nse_lots() -> dict:
     ## To prevent missing NIFTY50, which sometimes gets missed!
     # if 'NIFTY50' not in clean_lots.keys():
     #     clean_lots['NIFTY50'] = 50
+
+    if save:
+        pickle_me(clean_lots, DATAPATH / 'lots.pkl')
 
     return clean_lots
 
@@ -2246,7 +2255,7 @@ async def get_order_pf(PORT):
  
 
 def place_orders(ib: IB, cos: Union[Tuple, List], blk_size: int = 25) -> List:
-    """!!!CAUTION!!!: This places orders in the system
+    """!@ CAUTION @!: This places orders in the system
     NOTE: cos could be a single (contract, order)
           or a tuple/list of ((c1, o1), (c2, o2)...)
           made using tuple(zip(cts, ords))"""

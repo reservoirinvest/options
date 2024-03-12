@@ -18,7 +18,7 @@ COMMON:
 
   OPT_COLS: # Common option columns for anlaysis
    - ['conId', 'symbol', 'undPrice', 'expiry', 'strike', 'right', 
-      'dte', 'sdev', 'lot_size', 'margin', 'comm', 'ask', 'bid', 
+      'dte', 'sdev', 'lot', 'margin', 'comm', 'ask', 'bid', 
       'last', 'optPrice', 'expPrice', 'prop', 'rom']
 
   STATES:

@@ -680,86 +680,76 @@ def clean_ib_util_df(contracts: Union[list, pd.Series]) -> pd.DataFrame:
     return df2
 
 
-def create_target_opts(market: str) -> pd.DataFrame:
-
-    """Final naked target options with expected price
-    
-    NOTE:
-    ---
-    MINEXPROM, MINOPOTSELLINGPRICE and MAXNAKEDORDERS comes from config / var.yml"""
-    
-    MARKET = market.upper()
-    DATAPATH = ROOT / 'data' / MARKET
-
-    _vars = Vars(MARKET)
-
-    MINEXPROM = _vars.MINEXPROM
-    PREC = _vars.PREC
-    MINOPTSELLPRICE = _vars.MINOPTSELLPRICE
-    MAXNAKEDORDERS = _vars.MAXNAKEDORDERS      
-
-    df_opt_prices = get_pickle(DATAPATH / 'df_opt_prices.pkl')
-    df_opt_margins = get_pickle(DATAPATH / 'df_opt_margins.pkl')
-            
-
-    cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
-    df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
-
-    # remove NaN's with a commission value
-    df_naked_targets.comm.fillna(df_naked_targets.comm.dropna().unique()[0], inplace=True)
-
-    # add DTE
-    df_naked_targets = df_naked_targets.assign(dte = df_naked_targets.expiry.apply(lambda x: get_dte(x, MARKET)))
-    # df_naked_targets.insert(4, 'dte', df_naked_targets.expiry.apply(lambda x: get_dte(x, MARKET)))
-
-    # make multiplier an integer
-    df_naked_targets.multiplier = df_naked_targets.multiplier.astype('int')
-
-    # Get precise expected prices
-    xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
-            df_naked_targets.comm)/df_naked_targets.lot_size/df_naked_targets.multiplier
-
-    # Set the minimum option selling price
-    xp[xp < MINOPTSELLPRICE] = MINOPTSELLPRICE
-
-    # Make the expected Price
-    expPrice = pd.concat([xp, 
-                            df_naked_targets.optPrice], axis=1)\
-                            .max(axis=1)
-    expPrice = expPrice.apply(lambda x: get_prec(x, PREC))
-    df_naked_targets = df_naked_targets.assign(expPrice=expPrice)
-
-    # clean the nakeds
-    price_not_null = ~df_naked_targets.expPrice.isnull()
-    price_greater_than_zero = df_naked_targets.expPrice > 0
-
-    df = df_naked_targets[price_not_null & price_greater_than_zero].reset_index(drop=True)
-
-    # bump option price for those with expPrice = optPrice
-    opt_price_needs_bump = df.expPrice <= df.optPrice
-    new_opt_price = df[opt_price_needs_bump].expPrice + PREC
-    df.loc[opt_price_needs_bump, 'expPrice'] = new_opt_price
-
-    # re-establish the rom after bump
-    rom=(df.expPrice*df.lot_size*df.multiplier-df.comm)/df.margin*365/df.dte
-
-    df = df.assign(prop = df.sdev.apply(get_prob),
-                    rom=rom)    
-
-    # weed out ROMs which are infinity or not upto expectations
-    df = df[df.rom >= _vars.MINEXPROM]
-    df = df[df.rom != np.inf] # Eliminates `zero` margins
-
-    # restrict number of orders per symbol and right
-    df = df.sort_values(['symbol', 'rom'], ascending=[True, False]).groupby(['symbol', 'right']).head(MAXNAKEDORDERS)
-
-    df = df.reset_index(drop=True)
-
-    return df
-
-
 # * BUILDING THE BASE
 # ===================
+
+def prepare_to_sow(market: str,
+                   PAPER: bool=False,
+                   build_from_scratch: bool=False,
+                   save_sow: bool=True,
+                   ) -> pd.DataFrame:
+    """Prepares the naked sow dataframe"""
+
+    MARKET = market.upper()
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    if PAPER:
+        PORT = _vars.PAPER
+
+    # puts_only = True if MARKET == 'SNP' else False
+    puts_only = False
+
+    if build_from_scratch:
+
+        # delete logs
+        files = [ROOT/'log'/ f'{MARKET.lower()}_app.log',
+                 ROOT/'log'/ f'{MARKET.lower()}_ib.log']
+        delete_files(file_list=files)
+
+        delete_all_pickles(MARKET)
+
+        build_base(market=MARKET,
+                   PAPER=PAPER,
+                   puts_only=puts_only)
+
+    df = create_target_opts(market=MARKET)
+
+    # Get the portfolio and open orders        
+    df_openords, df_pf = asyncio.run(get_order_pf(PORT))
+
+    # Remove targets which are already in the portfolio
+    if isinstance(df_pf, pd.DataFrame):
+        df = df[~df.symbol.isin(set(df_pf.symbol))]      
+
+    # Remove open orders from df
+    if ~df_openords.empty:
+        df = df[~df.symbol.isin(set(df_openords.symbol))]
+
+    # Keep options with margin and expected price only
+    margins_only = ~df.margin.isnull()
+    with_expPrice = ~df.expPrice.isnull()
+
+    cleaned = margins_only & with_expPrice
+
+    df = df[cleaned]
+
+    # Sort with most likely ones on top
+    df = df.loc[(df.expPrice/df.optPrice)\
+                   .sort_values().index]\
+                    .reset_index(drop=True)
+
+    if save_sow:
+        DATAPATH = ROOT / 'data' / MARKET
+        SOW_PATH = DATAPATH / 'df_sow.pkl'
+        pickle_me(df, SOW_PATH)
+
+        # Store sows in temp path for analysis
+        MARKET_IS_OPEN = asyncio.run(isMarketOpen(MARKET))
+        pickle_the_sow(df, _vars, MARKET_IS_OPEN)
+        
+    return df
+
 
 def build_base(market: str,
                PAPER: bool,
@@ -941,7 +931,7 @@ def sow_me(MARKET: str,
     # ... Make (contract, order) tuple
 
     cos = [(contract , LimitOrder('Sell', qty, price))
-        for contract, qty, price in zip(df.contract, df.lot_size, df.expPrice)]
+        for contract, qty, price in zip(df.contract, df.lot, df.expPrice)]
 
     orders = asyncio.run(place_orders_async(MARKET=MARKET, 
                             PAPER=PAPER, 
@@ -980,10 +970,21 @@ def make_a_raw_contract(symbol: str, MARKET: str,
     EXCHANGE = "NSE" if MARKET == "NSE" else "SMART"
     CURRENCY = "INR" if MARKET == "NSE" else "USD"
 
+    if (SECTYPE == 'OPT') & (CURRENCY == 'USD'):
+        MULTPLIER = 100 # for SNP Options
+    else:
+        MULTPLIER = 1 # for NSE Options
+    
+
     if SECTYPE == 'STK':
         ct = Stock(symbol=symbol, exchange=EXCHANGE, currency=CURRENCY)
     elif SECTYPE == 'OPT':
-        ct = Option(symbol=symbol, lastTradeDateOrContractMonth=expiry, strike=strike, right=right, exchange=EXCHANGE)
+
+        # # Convert expiry to appropriate datetime format
+        # if isinstance(expiry, str):
+        #     expiry = util.parseIBDatetime(expiry)
+
+        ct = Option(symbol=symbol, lastTradeDateOrContractMonth=expiry, strike=strike, right=right, exchange=EXCHANGE, multiplier=MULTPLIER)
     else:
         logger.error(f"Unknown symbol {symbol} in {MARKET} market")
 
@@ -1162,29 +1163,6 @@ def get_a_stdev(iv: float, price: float, dte: float) -> float:
     Assumes iv as annual implied volatility"""
 
     return iv*price*math.sqrt(dte/365)
-
-
-def compute_sdev_right(df: pd.DataFrame) -> pd.DataFrame:
-
-    """
-    NOTE:
-    ----
-    ! This function has been replaced by `compute_strike_sd_right` function
-    """
-
-    # remove dtes <= 0 to prevent math failure
-    df = df[df.dte > 0].reset_index(drop=True)
-
-    # compute sdev
-    df = df.assign(sigma=df[['iv', 'undPrice', 'dte']].\
-                    apply(lambda x: get_a_stdev(x.iv, x.undPrice, x.dte), axis=1))
-
-    df = df.assign(sdev = (df.strike - df.undPrice) / df.sigma)
-
-    # determine the right
-    df = df.assign(right = df.sdev.apply(lambda sdev: 'P' if sdev < 0 else 'C'))
-
-    return df
 
 
 def compute_strike_sd_right(df: pd.DataFrame) -> pd.DataFrame:
@@ -1366,6 +1344,111 @@ def update_chains_dte(df: pd.DataFrame, MARKET: str):
     # correct the chains by merging
     df = pd.merge(df, df_ch, on=['symbol', 'expiry'], suffixes=('', '_y'))
     df = df.assign(dte = df.dte_y).drop(columns=['dte_y'])
+
+    return df
+
+
+def get_strike_closest_to_und(df_chains: pd.DataFrame, 
+                              how_many: int= -1) -> pd.DataFrame:
+    
+    """
+    Gets option contracts closest to strike for every expiry\n
+    For SNP only the lowest dte is taken\n
+    Useful to get reference margins.
+    int: -1 for closest Put
+    """
+
+    if set(df_chains.exchange.to_numpy()).pop() == 'SNP':
+        df_chains = df_chains.loc[df_chains.groupby(['symbol', 'right', 'strike']).dte.idxmin()]\
+                            .reset_index(drop=True)
+
+    strk_near_und = df_chains.groupby(['symbol', 'dte'])[['strike', 'undPrice']]\
+        .apply(lambda x: get_closest_values(x.strike, 
+                                            x.undPrice.min(), 
+                                            how_many))
+    strk_near_und.name = 'strk_near_und'
+
+    df_ch1 = df_chains.set_index(['symbol', 'dte']).join(strk_near_und)
+    df_ch = df_ch1[df_ch1.apply(lambda x: x.strike in x.strk_near_und, axis=1)] \
+                            .reset_index()
+    
+    return df_ch
+
+
+def create_target_opts(market: str) -> pd.DataFrame:
+
+    """Final naked target options with expected price
+    
+    NOTE:
+    ---
+    MINEXPROM, MINOPOTSELLINGPRICE and MAXNAKEDORDERS comes from config / var.yml"""
+    
+    MARKET = market.upper()
+    DATAPATH = ROOT / 'data' / MARKET
+
+    _vars = Vars(MARKET)
+
+    MINEXPROM = _vars.MINEXPROM
+    PREC = _vars.PREC
+    MINOPTSELLPRICE = _vars.MINOPTSELLPRICE
+    MAXNAKEDORDERS = _vars.MAXNAKEDORDERS      
+
+    df_opt_prices = get_pickle(DATAPATH / 'df_opt_prices.pkl')
+    df_opt_margins = get_pickle(DATAPATH / 'df_opt_margins.pkl')
+            
+
+    cols = [x for x in list(df_opt_margins) if x not in list(df_opt_prices)]
+    df_naked_targets = pd.concat([df_opt_prices, df_opt_margins[cols]], axis=1)
+
+    # remove NaN's with a commission value
+    df_naked_targets.comm.fillna(df_naked_targets.comm.dropna().unique()[0], inplace=True)
+
+    # add DTE
+    df_naked_targets = df_naked_targets.assign(dte = df_naked_targets.expiry.apply(lambda x: get_dte(x, MARKET)))
+    # df_naked_targets.insert(4, 'dte', df_naked_targets.expiry.apply(lambda x: get_dte(x, MARKET)))
+
+    # make multiplier an integer
+    df_naked_targets.multiplier = df_naked_targets.multiplier.astype('int')
+
+    # Get precise expected prices
+    xp = ((MINEXPROM*df_naked_targets.dte/365*df_naked_targets.margin) +
+            df_naked_targets.comm)/df_naked_targets.lot/df_naked_targets.multiplier
+
+    # Set the minimum option selling price
+    xp[xp < MINOPTSELLPRICE] = MINOPTSELLPRICE
+
+    # Make the expected Price
+    expPrice = pd.concat([xp, 
+                            df_naked_targets.optPrice], axis=1)\
+                            .max(axis=1)
+    expPrice = expPrice.apply(lambda x: get_prec(x, PREC))
+    df_naked_targets = df_naked_targets.assign(expPrice=expPrice)
+
+    # clean the nakeds
+    price_not_null = ~df_naked_targets.expPrice.isnull()
+    price_greater_than_zero = df_naked_targets.expPrice > 0
+
+    df = df_naked_targets[price_not_null & price_greater_than_zero].reset_index(drop=True)
+
+    # bump option price for those with expPrice = optPrice
+    opt_price_needs_bump = df.expPrice <= df.optPrice
+    new_opt_price = df[opt_price_needs_bump].expPrice + PREC
+    df.loc[opt_price_needs_bump, 'expPrice'] = new_opt_price
+
+    # re-establish the rom after bump
+    rom=(df.expPrice*df.lot*df.multiplier-df.comm)/df.margin*365/df.dte
+
+    df = df.assign(prop = df.sdev.apply(get_prob),
+                    rom=rom)    
+
+    # weed out ROMs which are infinity or not upto expectations
+    df = df[df.rom >= _vars.MINEXPROM]
+    df = df[df.rom != np.inf] # Eliminates `zero` margins
+
+    # restrict number of orders per symbol and right
+    df = df.sort_values(['symbol', 'rom'], ascending=[True, False]).groupby(['symbol', 'right']).head(MAXNAKEDORDERS)
+
+    df = df.reset_index(drop=True)
 
     return df
 
@@ -1674,14 +1757,14 @@ async def get_a_margin(ib: IB,
     Gives negative margin for `BUY` trades"""
 
     # if lots_path: # For NSE
-    #     lot_size = get_lots(contract, lots_path)
+    #     lot = get_lots(contract, lots_path)
     # else:
-    #     lot_size = get_lots(contract)
+    #     lot = get_lots(contract)
 
-    lot_size = get_lots(contract)
+    lot = get_lots(contract)
 
     if not order: # Uses ACTION instead of order
-        order = MarketOrder(ACTION, lot_size)
+        order = MarketOrder(ACTION, lot)
 
     def onError(reqId, errorCode, errorString, contract):
         logger.error(f"{contract.localSymbol} with reqId: {reqId} has errorCode: {errorCode} error: {errorString}")
@@ -1708,7 +1791,9 @@ async def get_a_margin(ib: IB,
         logger.error(f"{contract.localSymbol} has no margin and commission")
 
     lot = order.totalQuantity
-    output[cid]['lot_size'] = lot
+    # output[cid]['lot_size'] = lot  #!!! non-standard field name
+    output[cid]['lot'] = lot
+
     return output
 
 
@@ -1759,7 +1844,7 @@ async def get_margins(port: int,
             else c.symbol + c.lastTradeDateOrContractMonth + str(c.strike) + c.right 
             for c in opt_contracts]
 
-    df_contracts = df_contracts.assign(conId=conId, order = orders)\
+    df_contracts = df_contracts.assign(conId=conId, order=orders)\
                                 .set_index('conId')
 
     cos = list(zip(df_contracts.contract, df_contracts.order))
@@ -1788,9 +1873,60 @@ async def get_margins(port: int,
     df_mgncomm = pd.DataFrame(flat_results).T
     df_out = df_contracts.join(df_mgncomm).reset_index()
 
+    df_margins = df_out.assign(conId=pd.to_numeric(df_out.conId, errors='coerce'))
+    # df_margins = df_margins.dropna(axis=1, how='all') # !!! deletes `margin` and `comm` column !!
+
+    if np.issubdtype(df_margins.expiry, np.datetime64):
+        df_margins = df_margins.assign(expiry=df_margins.expiry.dt.strftime('%Y%m%d'))
+
     pbar.close()
 
-    return df_out
+    return df_margins
+
+
+def opt_margins_with_lot_check(df_ch: pd.DataFrame, 
+                           multiply_lot: bool=True) -> pd.DataFrame:
+    """Gets margins and commissions for option chains.
+    df_ch: option df
+    multiply_lot: mutiplies lot with multiplier and then divides to get margin for 1 lot
+    Note:
+    ----
+    For SNP run this function twice. Once with `multiply_lot` as True and then for remaining with it as False
+    """
+
+    try:
+        MARKET = df_ch.iloc[0].exchange
+    except AttributeError:
+        logging.error(f"MARKET is unknown for {df_ch.head(1)}")
+        return None
+
+    if MARKET != 'NSE':
+        MARKET = 'SNP'
+
+    _vars = Vars(MARKET)
+    PORT = _vars.PORT
+
+    opt_contracts = [make_a_raw_contract(symbol=symbol, MARKET=MARKET, secType='OPT', strike=strike, right=right, expiry=expiry)
+    for symbol, strike, right, expiry in zip(df_ch.symbol, df_ch.strike, df_ch.right, df_ch.expiry)]
+
+    if multiply_lot:
+        orders = [MarketOrder(action='SELL', totalQuantity=qty) for qty in df_ch.lot*df_ch.multiplier]
+        df_margins = asyncio.run(get_margins(port=PORT, contracts=opt_contracts, orders=orders))
+        df_margins.margin = df_margins.margin / df_margins.lot
+        df_margins.comm = df_margins.comm / df_margins.lot
+
+    else: # orders without multiplier
+        orders = [MarketOrder(action='SELL', totalQuantity=qty) for qty in df_ch.lot]
+        df_margins = asyncio.run(get_margins(port=PORT, contracts=opt_contracts, orders=orders))
+
+    # ensure comm for margin is available
+    max_margin = df_margins.comm.max()
+    cond = ~df_margins.margin.isnull() & df_margins.comm.isnull()
+    df_margins.loc[cond, 'comm'] = max_margin
+
+    df_margins.drop(columns='contract', inplace=True)
+
+    return df_margins
 
 
 # * NSE SPECIFIC FUNCTIONS
@@ -1830,6 +1966,24 @@ def get_nse_payload(url: str) -> requests.models.Response:
     return response
 
 
+def get_nse_native_fno_list() -> list:
+    """Gets a dictionary of native nse symbols from nse.com"""
+
+    MKT_LOTS_URL = 'https://archives.nseindia.com/content/fo/fo_mktlots.csv'
+
+    response = get_nse_payload(MKT_LOTS_URL).text
+
+    res_dict = {} # unclean symbol results dictionary
+
+    for line in response.split('\n'):
+        if line != '' and re.search(',', line) and (line.casefold().find('symbol') == -1):
+            (code, name) = [x.strip() for x in line.split(',')[1:3]]
+            res_dict[code] = int(name)
+    nselist = [k for k, _ in res_dict.items()]
+
+    return nselist
+
+
 def nse2ib(nselist: list, as_dict: bool = False) -> Union[list, dict]:
     """Convert NSE symbols to IB friendly ones"""
 
@@ -1857,17 +2011,7 @@ def make_nse_lots(save: bool=True) -> dict:
     MARKET = 'NSE'
     DATAPATH = ROOT / 'data' / MARKET.lower()
 
-    url = "https://archives.nseindia.com/content/fo/fo_mktlots.csv"
-
-    response = get_nse_payload(url).text
-
-    res_dict = {} # unclean symbol results dictionary
-
-    for line in response.split('\n'):
-        if line != '' and re.search(',', line) and (line.casefold().find('symbol') == -1):
-            (code, name) = [x.strip() for x in line.split(',')[1:3]]
-            res_dict[code] = int(name)
-    nselist = [k for k, _ in res_dict.items()]
+    nselist = get_nse_native_fno_list()
 
     path_to_yaml_file = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
 
@@ -1947,9 +2091,6 @@ async def assemble_nse_underlyings(PORT: int) -> dict:
     unds_dict = make_dict_of_qualified_contracts(qualified_unds)
 
     return unds_dict
-
-
-
 
 
 # * SNP SPECIFIC FUNCTION
@@ -2093,74 +2234,6 @@ async def assemble_snp_underlyings(PORT: int) -> dict:
 
 # * SOWING NAKEDS
 # ===============
-
-def prepare_to_sow(market: str,
-                   PAPER: bool=False,
-                   build_from_scratch: bool=False,
-                   save_sow: bool=True,
-                   ) -> pd.DataFrame:
-    """Prepares the naked sow dataframe"""
-
-    MARKET = market.upper()
-    _vars = Vars(MARKET)
-    PORT = _vars.PORT
-
-    if PAPER:
-        PORT = _vars.PAPER
-
-    # puts_only = True if MARKET == 'SNP' else False
-    puts_only = False
-
-    if build_from_scratch:
-
-        # delete logs
-        files = [ROOT/'log'/ f'{MARKET.lower()}_app.log',
-                 ROOT/'log'/ f'{MARKET.lower()}_ib.log']
-        delete_files(file_list=files)
-
-        delete_all_pickles(MARKET)
-
-        build_base(market=MARKET,
-                   PAPER=PAPER,
-                   puts_only=puts_only)
-
-    df = create_target_opts(market=MARKET)
-
-    # Get the portfolio and open orders        
-    df_openords, df_pf = asyncio.run(get_order_pf(PORT))
-
-    # Remove targets which are already in the portfolio
-    if isinstance(df_pf, pd.DataFrame):
-        df = df[~df.symbol.isin(set(df_pf.symbol))]      
-
-    # Remove open orders from df
-    if ~df_openords.empty:
-        df = df[~df.symbol.isin(set(df_openords.symbol))]
-
-    # Keep options with margin and expected price only
-    margins_only = ~df.margin.isnull()
-    with_expPrice = ~df.expPrice.isnull()
-
-    cleaned = margins_only & with_expPrice
-
-    df = df[cleaned]
-
-    # Sort with most likely ones on top
-    df = df.loc[(df.expPrice/df.optPrice)\
-                   .sort_values().index]\
-                    .reset_index(drop=True)
-
-    if save_sow:
-        DATAPATH = ROOT / 'data' / MARKET
-        SOW_PATH = DATAPATH / 'df_sow.pkl'
-        pickle_me(df, SOW_PATH)
-
-        # Store sows in temp path for analysis
-        MARKET_IS_OPEN = asyncio.run(isMarketOpen(MARKET))
-        pickle_the_sow(df, _vars, MARKET_IS_OPEN)
-        
-    return df
-
 
 def pickle_the_sow(df: pd.DataFrame, 
                    _vars: dict, 

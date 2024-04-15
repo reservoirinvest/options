@@ -1,3 +1,7 @@
+# Program left at:
+ - `/tests/one_symbol.ipynb` - to integrate lots and mutlipliers to get_unds_with_prices() function
+ - `/tests/zrule_of_25.ipynb` - to complete offline margin calculations, first for SNP and then for NSE
+
 # To-do
 - [x] generate chains for unds and pickle
 - [x] generate options for strikes and expiries for each und

@@ -16,7 +16,10 @@ COMMON:
   
   BAR_FORMAT: "{desc:<10}{percentage:3.0f}%|{bar:25}{r_bar}{bar:-10b}"
 
-  OPT_COLS: # Common option columns for anlaysis
+  COLS:
+   - ['symbol', 'expiry', 'strike', 'right']
+  
+  OPT_COLS: # Final option columns for anlaysis
    - ['conId', 'symbol', 'undPrice', 'expiry', 'strike', 'right', 
       'dte', 'sdev', 'lot', 'margin', 'comm', 'ask', 'bid', 
       'last', 'optPrice', 'expPrice', 'prop', 'rom']
@@ -49,15 +52,15 @@ NSE:
   MINDTE: 0
   MAXDTE: 60
 
-  CALLSTDMULT: 1.3 # Min stdev multiple for calls
-  PUTSTDMULT: -1.3 # Min stdev multiple for puts
+  CALLSTDMULT: 2 # Min stdev multiple for calls
+  PUTSTDMULT: -1.8 # Min stdev multiple for puts
 
   DTESTDEVLOW: 0.05 # Upper limit of adjustment to stdev based on DTE
   DTESTDEVHI: 1 # Lower limit of adjustment to stdev based on DTE
   
   DECAYRATE: 0.05 # Decay rate of the sdev adjustment curve on DTE
 
-  MINEXPROM: 1.5
+  MINEXPROM: 2.5
 
   MINOPTSELLPRICE: 0.25
   MAXOPTBUYPRICE: 0.05
@@ -87,7 +90,7 @@ SNP:
   MAXDTE: 60
 
   CALLSTDMULT: 2 # Min stdev multiple for calls
-  PUTSTDMULT: -1.2 #  Min stdev multiple for puts
+  PUTSTDMULT: -1.8 #  Min stdev multiple for puts
 
   DTESTDEVLOW: 0.1 # Upper limit of adjustment to stdev based on DTE
   DTESTDEVHI: 1.2 # Lower limit of adjustment to stdev based on DTE

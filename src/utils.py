@@ -16,6 +16,7 @@ from typing import Iterable, List, Tuple, Union
 import numpy as np
 import pandas as pd
 import pandas_market_calendars as mcal
+import pendulum
 import pytz
 import requests
 import yaml
@@ -23,7 +24,7 @@ from from_root import from_root
 from ib_insync import (IB, Contract, Index, LimitOrder, MarketOrder, Option,
                        Stock, util)
 from loguru import logger
-# from nsepython import fnolist, nse_get_fno_lot_sizes
+from pendulum.date import Date
 from pytz import timezone
 from scipy.integrate import quad
 from tqdm.asyncio import tqdm, tqdm_asyncio
@@ -2323,6 +2324,38 @@ def opt_margins_with_lot_check(df: pd.DataFrame,
     return df_margins
 
 
+def snp_margin_compute(df: pd.DataFrame) -> pd.DataFrame:
+
+    """Generates computed margins for symbol df with undPrice, lot and multiplier"""
+
+    # Establish the range
+    range1 = [0, 2.5]
+    range2 = [2.5, 5]
+    range3 = [5, 16.67]
+    range4 = [16.67, np.inf]
+
+    # Set up the masks
+    m1 = df.undPrice.between(*range1, inclusive='left')
+    m2 = df.undPrice.between(*range2, inclusive='left')
+    m3 = df.undPrice.between(*range3, inclusive='left')
+    m4 = df.undPrice.between(*range4, inclusive='left')
+
+    # compute the values
+    value1 = df[m1].undPrice*df[m1].lot*df[m1].multiplier*0.3
+    value2 = df[m2].lot*df[m2].multiplier*5
+    value3 = df[m3].undPrice*df[m3].lot*df[m3].multiplier
+    value4 = df[m4].lot*df[m4].multiplier*2.5
+    dfs = []
+
+    for i in range(4):
+        mask = 'm'+str(i+1)
+        val = 'value'+str(i+1)
+        dfs.append(df[eval(mask)].assign(mgnCompute=eval(val)))
+    df_out = pd.concat(dfs).reset_index(drop=True)
+
+    return df_out
+
+
 # * NSE SPECIFIC FUNCTIONS
 # ========================
 
@@ -2525,6 +2558,25 @@ async def assemble_nse_underlyings(PORT: int) -> dict:
     unds_dict = make_dict_of_qualified_contracts(qualified_unds)
 
     return unds_dict
+
+
+def get_nse_holidays() -> set:
+
+    """
+    Gets holidays from nse website
+    """
+
+    url = "https://www.nseindia.com/api/holiday-master?type=trading"
+
+    r = get_nse_payload(url)
+
+    holiday_dict = json.loads(r.text).get('CBM')
+    df_nse_holidays = pd.DataFrame.from_records(holiday_dict)
+
+    out = set(pd.to_datetime(df_nse_holidays.tradingDate).dt.date.apply(pendulum.instance))
+
+    return out
+
 
 
 # * SNP SPECIFIC FUNCTION

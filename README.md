@@ -1,12 +1,26 @@
 # Program left at:
+
+## Generating the right margins - independent of IBKR - for nse
+ - `tests\znse_expiries.ipynb`. To get option expiry dates for nse.
+    - function to take care of Thursday holidays
+    - If `NIFTY` in symbol, should take this week's Thursday date
+    - ...else take the last Thursday of the current month
+
+- `tests\scrape_nse_margins.ipynb`. To complete SAMCO margins with the following defaults for a symbol
+    - Expiry Date: Take nse expiry date functions from above
+    - Price: Take the current market price. (May need a new nse function)
+    - Qty: extract from lots
+
  - `/tests/one_symbol.ipynb` - to integrate lots and mutlipliers to get_unds_with_prices() function
+    
  - `/tests/zrule_of_25.ipynb` - to complete offline margin calculations, first for SNP and then for NSE
 
-# To-do
+
+# Functions for the following flow:
 - [x] generate chains for unds and pickle
 - [x] generate options for strikes and expiries for each und
 - [x] get price and margin for edge options for each und
-- [x] determine expected price
+- [x] determine expected price from yml defaults
 - [x] place naked orders for new `sow`
 
 

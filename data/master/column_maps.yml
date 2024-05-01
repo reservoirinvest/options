@@ -1,0 +1,25 @@
+---
+# Standardize nse web symbol mapping
+
+NSE_WEB_OPTIONS:
+
+  symbol: 'underlying'
+  undPrice: 'underlyingValue'
+  strike: 'strikePrice'
+  expiry: 'expiryDate'
+  right: 'right'
+  id: 'identifier'
+  oi: 'openInterest'
+  oi_chg: 'changeinOpenInterest'
+  pchg_oi: 'pchangeinOpenInterest'
+  volume: 'totalTradedVolume'
+  change: 'change'
+  p_change: 'pChange'
+  total_buy_qty: 'totalBuyQuantity'
+  total_sell_qty: 'totalSellQuantity'
+  bid_qty: 'bidQty'
+  bid_price: 'bidprice'
+  ask_qty: 'askQty'
+  ask_price: 'askPrice'
+  iv: 'impliedVolatility'
+  price: 'lastPrice'

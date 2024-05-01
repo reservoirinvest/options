@@ -21,15 +21,16 @@
 - [x] generate options for strikes and expiries for each und
 - [x] get price and margin for edge options for each und
 - [x] determine expected price from yml defaults
+- [x] Build RoM for naked_targets
 - [x] place naked orders for new `sow`
 
 
-- [x] Build RoM for naked_targets
 - [x] Automate `sow`
 - [x] Build `run.py` with a simple CLI
 - [x] Make functions for `cancel_api_ords`
 - [x] Make function for `cancel_ords` in which you can give the specific orders.    
     -- replace sow_me's `cancel_api_ords` with `cancel_ords` only for equity position open orders.
+
 - [x] Make function to extract info from IBKR portal reports
 - [ ] Make rule of 25 for `computed margins` of option chain
 - [ ] Make a function to limit number of naked orders per symbol with `MAXNAKEDORD`.
@@ -106,3 +107,5 @@ Check this link out for how to do it: https://stackoverflow.com/a/39213616
 
 # Good reads
 1. Check out [Covered calls writing with protective put](https://www.thebluecollarinvestor.com/covered-call-writing-with-protective-puts-a-proposed-strategy/) article
+2. [optopsy](https://github.com/michaelchu/optopsy) - good strategies, program layout and extractions for SNP (SPY)
+3. [Option Chain Analyzer](https://github.com/VarunS2002/Python-NSE-Option-Chain-Analyzer) - comprehensive extraction from NSE for equity and index options. Good reference to UI with refresh and technical analysis.

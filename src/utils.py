@@ -1,4 +1,5 @@
 import asyncio
+import calendar
 import datetime
 import glob
 import io
@@ -2359,12 +2360,12 @@ def snp_margin_compute(df: pd.DataFrame) -> pd.DataFrame:
 # * NSE SPECIFIC FUNCTIONS
 # ========================
 
-headers = {
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, '
-                        'like Gecko) '
-                        'Chrome/80.0.3987.149 Safari/537.36',
-    'accept-language': 'en,gu;q=0.9,hi;q=0.8',
-    'accept-encoding': 'gzip, deflate, br'}
+headers = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                            'AppleWebKit/537.36 '
+                            '(KHTML, like Gecko) '
+                            'Chrome/80.0.3987.149 Safari/537.36',
+            'accept-language': 'en,gu;q=0.9,hi;q=0.8', 
+            'accept-encoding': 'gzip, deflate, br'}
 
 
 def get_nse_payload(url: str) -> requests.models.Response:
@@ -2376,6 +2377,8 @@ def get_nse_payload(url: str) -> requests.models.Response:
     * https://archives.nseindia.com/content/fo/fo_mktlots.csv for lots
     * https://nsearchives.nseindia.com/content/nsccl/C_CATG.T01 for margin groups
     * https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O for fno equity list
+    * https://www.nseindia.com/api/option-chain-equities?symbol=RELIANCE for equity options
+    * https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY for index options
 
     Response processing examples:
     ---
@@ -2384,11 +2387,11 @@ def get_nse_payload(url: str) -> requests.models.Response:
     """
 
     base_url = 'https://www.nseindia.com'
-    session = requests.Session()
-
-    # r = session.get(base_url, headers=headers, timeout=5)
-    # response = session.get(url, timeout=5, headers=headers)
-    response=requests.get(url, headers=headers)
+    
+    with requests.Session() as session:
+        request = session.get(base_url, headers=headers, timeout=5)
+        cookies = dict(request.cookies)
+        response = session.get(url, headers=headers, timeout=5, cookies=cookies)
 
     return response
 
@@ -2573,8 +2576,101 @@ def get_nse_holidays() -> set:
     holiday_dict = json.loads(r.text).get('CBM')
     df_nse_holidays = pd.DataFrame.from_records(holiday_dict)
 
-    out = set(pd.to_datetime(df_nse_holidays.tradingDate).dt.date.apply(pendulum.instance))
+    out = set(pd.to_datetime(df_nse_holidays.tradingDate).dt.date)
 
+    return out
+
+
+def get_weekday_int(weekday_name: str) -> int:
+    """Gives the integer of the weekday string given"""
+
+    weekday_name = weekday_name.upper()
+
+    weekdays = {name.upper(): i for i, name in enumerate(calendar.day_name)}
+
+
+    # takes care of abbreviated weekday_name
+    weekday_name = [k for k, v in weekdays.items() if weekday_name.upper() in k][0]
+
+    weekday_int = weekdays.get(weekday_name)
+
+    return weekday_int
+
+
+def get_weekday_date(weekday_name: str):
+
+    """
+    Gets date of the weekday provided in `str`
+    """
+
+    today = datetime.date.today()
+    target_weekday = get_weekday_int(weekday_name)
+    days_to_add = (target_weekday - today.weekday()) % 7
+
+    return today + datetime.timedelta(days=days_to_add)
+
+
+def get_nse_weeklies_expiry_date() -> datetime.date:
+    """Gets nse weeklies expiry for NSE index options"""
+
+    weekly_expiry_date = get_weekday_date("Thu")
+
+    # Adjust for NSE holidays
+    listOfNseHolidays = get_nse_holidays()
+
+    if weekly_expiry_date in listOfNseHolidays:
+        weekly_expiry_date = weekly_expiry_date - datetime.timedelta(days=1)
+
+    return weekly_expiry_date
+
+
+def get_nse_monthly_expiry_date() -> datetime.date:
+
+    """Gets the nse monthly expiry date adjusted for holidays in this year"""
+    
+    today = today = datetime.date.today()
+
+    # Get the last day of the month
+    last_day_of_month = calendar.monthrange(today.year, today.month)[1]
+
+    # Get month from the weekly expiry date
+    month = get_nse_weeklies_expiry_date().month
+
+    # Make last date of the month
+
+    last_date_of_month = datetime.date(today.year, month, last_day_of_month )
+
+
+    day_of_expiry = get_weekday_int("Thu") # Usual day of expiry
+    weekday_delta = last_date_of_month.weekday() - day_of_expiry
+
+    if weekday_delta >= 0:
+        expiry_date = last_date_of_month - datetime.timedelta(weekday_delta)
+    else:
+        expiry_date = last_date_of_month - datetime.timedelta(7 - abs(weekday_delta))
+
+    
+    # Adjust for NSE holidays
+    listOfNseHolidays = get_nse_holidays()
+
+    if expiry_date in listOfNseHolidays:
+        expiry_date = expiry_date - datetime.timedelta(days=1)
+
+    return expiry_date
+
+
+def this_is_nse_index(symbol: str) -> bool:
+    return True if 'NIFTY' in symbol.upper() else False
+
+
+def get_nse_expiry_date(symbol: str) -> datetime.date:
+
+    """Gets nse expiry date for the symbol, adjusted to this year's nse holidays"""
+
+    out = get_nse_weeklies_expiry_date()\
+        if this_is_nse_index(symbol)\
+            else get_nse_monthly_expiry_date()
+    
     return out
 
 

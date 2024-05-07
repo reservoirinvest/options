@@ -2409,38 +2409,40 @@ def nse_ban_list() -> list:
     return ban_list
 
 
-def get_lots_from_nse() -> dict:
+def get_lots_from_nse(save: bool=True) -> dict:
     """
     Gets lots from nse site without any symbol cleansing
     """
 
     MKT_LOTS_URL = 'https://archives.nseindia.com/content/fo/fo_mktlots.csv'
 
+    MARKET = 'NSE'
+    DATAPATH = ROOT / 'data' / MARKET.lower()
+
+    lots_path = DATAPATH / 'lots.pkl'
+
     response = get_nse_payload(MKT_LOTS_URL).text
 
     res_dict = {} # unclean symbol results dictionary
 
-    for line in response.split('\n'):
-        if line != '' and re.search(',', line) and (line.casefold().find('symbol') == -1):
-            (code, name) = [x.strip() for x in line.split(',')[1:3]]
-            res_dict[code] = int(name)
+    try:
+        for line in response.split('\n'):
+            if line != '' and re.search(',', line) and (line.casefold().find('symbol') == -1):
+                (code, name) = [x.strip() for x in line.split(',')[1:3]]
+                res_dict[code] = int(name)
+    except ValueError:
+        logger.error("Fresh lots not available in 'https://archives.nseindia.com/content/fo/fo_mktlots.csv'")
+        res_dict = get_pickle(lots_path, print_msg=True)
+        save = False
+
+    if save:
+        pickle_me(res_dict, lots_path)
     
     return res_dict
 
 
 def get_nse_native_fno_list() -> list:
     """Gets a dictionary of native nse symbols from nse.com"""
-
-    # MKT_LOTS_URL = 'https://archives.nseindia.com/content/fo/fo_mktlots.csv'
-
-    # response = get_nse_payload(MKT_LOTS_URL).text
-
-    # res_dict = {} # unclean symbol results dictionary
-
-    # for line in response.split('\n'):
-    #     if line != '' and re.search(',', line) and (line.casefold().find('symbol') == -1):
-    #         (code, name) = [x.strip() for x in line.split(',')[1:3]]
-    #         res_dict[code] = int(name)
 
     res_dict = get_lots_from_nse()
 
@@ -2469,14 +2471,17 @@ def nse2ib(nselist: list, as_dict: bool = False) -> Union[list, dict]:
     return ib_fnos
 
 
-def make_nse_lots(save: bool=True) -> dict:
+def make_nse_lots() -> dict:
 
     """Makes lots for NSE on cleansed IB symbols without BLACKLIST"""
 
     MARKET = 'NSE'
     DATAPATH = ROOT / 'data' / MARKET.lower()
 
+    lots_path = DATAPATH / 'lots.pkl'
+
     res_dict = get_lots_from_nse()
+
     nselist = list(res_dict.keys())
 
     path_to_yaml_file = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
@@ -2502,13 +2507,6 @@ def make_nse_lots(save: bool=True) -> dict:
     clean_lots = {k: v for k, v 
                     in result.items() 
                     if k not in BLACKLIST} 
-
-    ## To prevent missing NIFTY50, which sometimes gets missed!
-    # if 'NIFTY50' not in clean_lots.keys():
-    #     clean_lots['NIFTY50'] = 50
-
-    if save:
-        pickle_me(clean_lots, DATAPATH / 'lots.pkl')
 
     return clean_lots
 
@@ -2673,6 +2671,84 @@ def get_nse_expiry_date(symbol: str) -> datetime.date:
     
     return out
 
+
+def make_nse_option_url(symbol) -> str:
+
+    if this_is_nse_index(symbol):
+        url = 'https://www.nseindia.com/api/option-chain-indices?symbol=' + symbol.upper()
+    else:
+        url = 'https://www.nseindia.com/api/option-chain-equities?symbol=' + symbol.upper()
+
+    return url
+
+
+def nse_web_json_to_df(symbol: str) -> pd.DataFrame:
+    """Makes option df of nse symbol from nseindia.com"""
+
+    url = make_nse_option_url(symbol)
+
+    response = get_nse_payload(url)
+
+    js = response.json()
+    data = js.get('records').get('data')
+
+    matches = ['CE', 'PE']
+
+    # Extract options dictionary
+    options = dict()
+
+    for d in data:
+        for k, v in d.items():
+            if any(x in k for x in matches):
+                v['right'] = k
+                s = v['identifier']
+                options[s] = v
+
+    df_opts = pd.DataFrame.from_dict(options, orient='index')
+
+    return df_opts
+
+
+
+def clean_nse_web_options(df_opts: pd.DataFrame) -> pd.DataFrame:
+    """Cleans nse web option df with standardized column names from /data/master/column_maps.yml"""
+
+    with open(ROOT / 'data' / 'master'/ 'column_maps.yml', 'rb') as f:
+        data_map = yaml.safe_load(f)
+
+    map_cols = data_map['NSE_WEB_OPTIONS']
+
+    # reverse to keep structure of cols in df
+    col_map = {v:k for k, v in map_cols.items()}
+
+    # remove unncessary columns
+    df_opts = df_opts.rename(columns=col_map)
+    df_opts = df_opts[list(col_map.values())]
+    df_opts = df_opts.reset_index(drop=True)\
+                        .drop(columns=['id'])
+    
+    # clean up expiry dates
+    df_opts.expiry = pd.to_datetime(df_opts.expiry, format='%d-%b-%Y').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
+    df_opts.sort_values(['expiry', 'strike', 'right'], ascending=[True, False, True], inplace=True)
+    df_opts = df_opts.reset_index(drop=True)
+    
+    return df_opts
+
+
+def get_an_nse_option_chain(symbol: str) -> pd.DataFrame:
+
+    df = nse_web_json_to_df(symbol)\
+            .pipe(clean_nse_web_options)
+    
+
+    # # !!! lot size will be extracted from SAMCO
+    # lots = get_lots_from_nse()
+    # lot = lots.get(symbol)
+
+    # # insert lot before price
+    # df.insert(len(list(df))-1, 'lot', lot)
+
+    return df
 
 
 # * SNP SPECIFIC FUNCTION

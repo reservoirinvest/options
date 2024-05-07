@@ -24,6 +24,9 @@ dependencies = [
     "icecream>=2.1.3",
     "html5lib>=1.1",
     "pendulum>=3.0.0",
+    "nselib>=0.7",
+    "aiohttp>=3.9.5",
+    "grequests>=0.7.0",
 ]
 requires-python = ">=3.11"
 readme = "README.md"

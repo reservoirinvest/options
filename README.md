@@ -1,19 +1,25 @@
 # Program left at:
 
-## Generating the right margins - independent of IBKR - for nse
- - `tests\znse_expiries.ipynb`. To get option expiry dates for nse.
-    - function to take care of Thursday holidays
-    - If `NIFTY` in symbol, should take this week's Thursday date
-    - ...else take the last Thursday of the current month
+## Generating the right margins and expPrice - independent of IBKR - for nse
 
-- `tests\scrape_nse_margins.ipynb`. To complete SAMCO margins with the following defaults for a symbol
-    - Expiry Date: Take nse expiry date functions from above
-    - Price: Take the current market price. (May need a new nse function)
-    - Qty: extract from lots
+- `tests\scrape_nse_margins.ipynb`. 
+
+    - Make scraping for marigins from Zerodha. SAMCO seems unreliable.
+
+- Compute `margins` for NSE
+    - Integrate lots to df_opts of a symbol
+    - For each symbol, extract highest and lowest PE per expiry, and find out its margin from SAMCO
+    - Populate rest of the margins with a linear function against each strike price
+
+- Compute `expected price`
+    - Establish ROM from price. If price is not available, use last ask price. If that is also not available, remove it from df_opts
+    - Compute SD of the strikes based on iv of strike price closest to underlying
+    - Compute expected price of all options, based on expected ROM. For OTMs add instrinsic value (mod(strike-underlying)) to the price.
+    - Sort down by the most profitable trades.
 
  - `/tests/one_symbol.ipynb` - to integrate lots and mutlipliers to get_unds_with_prices() function
     
- - `/tests/zrule_of_25.ipynb` - to complete offline margin calculations, first for SNP and then for NSE
+ - `/tests/zrule_of_25.ipynb` - to complete offline margin calculations for SNP
 
 
 # Functions for the following flow:
@@ -32,7 +38,7 @@
     -- replace sow_me's `cancel_api_ords` with `cancel_ords` only for equity position open orders.
 
 - [x] Make function to extract info from IBKR portal reports
-- [ ] Make rule of 25 for `computed margins` of option chain
+- [ ] SNP: Make rule of 25 for `computed margins` of option chain
 - [ ] Make a function to limit number of naked orders per symbol with `MAXNAKEDORD`.
 - [ ] Generate symbol `state`s (see below)
 
@@ -45,6 +51,7 @@
 
 - [x] Keep PUTS ONLY for SNP nakeds
 - [ ] Every sowed option should have a closing order that reaps
+   ... closing order could be based on 2 x of the expROM by dte. 
 - [ ] Every long stock should have a covered call in next week's expiry and protective put in 3 months
 - [ ] Every short stock should have a covered put in next week's expiry and protective call in 3 months
 - [ ] Every symbol should have its own standard deviations for naked sows, covers and protections
@@ -62,7 +69,9 @@ Maintenance Margin is the same as Initial Margin
 Check https://www.interactivebrokers.com/en/trading/margin-stocks.php
 
 # For NSE
-- [ ] Every sowed option should have a closing order that reaps
+- [ ] Every sowed option should have a closing order that reaps. 
+   ... closing order could be based on 2 x of the expROM by dte. 
+- [ ] The most profitable trades should be sowed, if it is not there in current position.
 
 ## Margin Calculation
 

@@ -1,10 +1,16 @@
 # Program left at:
+- Using [vulture](https://github.com/jendrikseipp/vulture/) to remove dead code
+- Build a separate `base.py` - separated from `utils.py` which will:
+   - have an `options.pkl` with lots and computed_margins based on strike closest to market price from IB
+      - for nse it will also have option price, rom and pop
+      - for snp option price, rom and pop will be NaN
+   - have a `history.pkl` with all underlying's daily history for 365 days
 
 ## Generating the right margins and expPrice - independent of IBKR - for nse
 
-- `tests\scrape_nse_margins.ipynb`. 
+- `tests\zerodha_scrape.ipynb`. 
 
-    - Make scraping for marigins from Zerodha. SAMCO seems unreliable.
+    - Make scraping for margins from Zerodha. SAMCO seems unreliable.
 
 - Compute `margins` for NSE
     - Integrate lots to df_opts of a symbol
@@ -22,10 +28,13 @@
  - `/tests/zrule_of_25.ipynb` - to complete offline margin calculations for SNP
 
 
+# General Functions
+- [ ] Refactor PORT to use get_port(MARKET, PAPER|LIVE) function.
+
 # Functions for the following flow:
 - [x] generate chains for unds and pickle
 - [x] generate options for strikes and expiries for each und
-- [x] get price and margin for edge options for each und
+- [x] get price and margin for edge options for each und [make_chains_with_margins()]
 - [x] determine expected price from yml defaults
 - [x] Build RoM for naked_targets
 - [x] place naked orders for new `sow`
@@ -81,10 +90,11 @@ For the securities listed in Group I, scrip wise daily volatility calculated usi
 For the securities listed in Group II, scrip wise daily VaR is 6 times the volatility so calculated subject to a minimum of 21.5%. 
 For the securities listed in Group III the VaR margin is 50% if traded at least once per week on any stock exchange; 75% otherwise. In case of Group III the securities shall be monitored on a weekly basis, and the VaR margin rates shall be increased to 75% if the security has not traded for a week. In case the VaR margin rate is 75% and the security trades during the day, the VaR margin rate shall be revised to 50% from start of next trading day 
 
-### Notes:
-URL for fnolist - https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O
-URL for Group Type: https://nsearchives.nseindia.com/content/nsccl/C_CATG.T01
-Check this link out for how to do it: https://stackoverflow.com/a/39213616
+### NSE Notes:
+- URL for fnolist - https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O
+- URL for Group Type: https://nsearchives.nseindia.com/content/nsccl/C_CATG.T01
+- Check this link out for how to do it: https://stackoverflow.com/a/39213616
+- Could not extract lots from fnolots.csv - thanks to [NSE's circular](https://nsearchives.nseindia.com/content/circulars/FAOP61157.pdf)
 
 # Symbol `States` with colours.
 

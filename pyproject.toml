@@ -27,6 +27,8 @@ dependencies = [
     "nselib>=0.7",
     "aiohttp>=3.9.5",
     "grequests>=0.7.0",
+    "js2py>=0.74",
+    "vulture>=2.11",
 ]
 requires-python = ">=3.11"
 readme = "README.md"

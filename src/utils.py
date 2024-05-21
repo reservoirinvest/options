@@ -16,16 +16,17 @@ from typing import Iterable, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import pandas_market_calendars as mcal
-import pendulum
+# import pandas_market_calendars as mcal
+# import pendulum
 import pytz
 import requests
 import yaml
+from bs4 import BeautifulSoup
 from from_root import from_root
 from ib_insync import (IB, Contract, Index, LimitOrder, MarketOrder, Option,
                        Stock, util)
 from loguru import logger
-from pendulum.date import Date
+# from pendulum.date import Date
 from pytz import timezone
 from scipy.integrate import quad
 from tqdm.asyncio import tqdm, tqdm_asyncio
@@ -93,6 +94,19 @@ class Vars:
         for k, v in data[MARKET].items():
             setattr(self, k.upper(), v)
 
+
+def get_port(MARKET: str, input: str='LIVE') -> int:
+
+    """Gets the port no for `PAPER` | `LIVE` ibkr"""
+
+    _vars = Vars(MARKET.upper())
+
+    if input.upper() == 'PAPER':
+        port = _vars.PAPER
+    else:
+        port = _vars.PORT
+
+    return port
 
 def to_list(data):
     """Converts any iterable to a list, and non-iterables to a list with a single element.
@@ -838,7 +852,7 @@ def update_chain_strikes(df_chains: pd.DataFrame) -> pd.DataFrame:
 
 def make_chains_with_margins(MARKET: str, MAX_DAYS_OLD: int=0) -> pd.DataFrame:
     """
-    Makes chains with margins for all options and pickles
+    Makes chains with margins for all underlying options with closest market strike and pickles
     """
 
     DATAPATH = ROOT / 'data' / MARKET.lower()
@@ -1225,18 +1239,21 @@ def build_base(market: str,
     df_opt_prices = asyncio.run(get_prices_with_ivs(PORT, df_all_qualified_options, desc="Getting option prices"))
     pickle_with_age_check(df_opt_prices, opt_prices_path, 0)
 
-    # Get the lots for nse
-    if MARKET == 'NSE':
-        lots = make_nse_lots()        
-        # pickle_with_age_check(lots, lots_path, 0) # make_nse_lots automatically pickles
+    # # Get the lots for nse
+    # if MARKET == 'NSE':
+    #     lots = make_nse_lots()
 
-    # Get the option margins
-    if MARKET == 'NSE':
-        df_opt_margins = asyncio.run(get_margins(port=PORT, 
+    # # Get the option margins
+    # if MARKET == 'NSE':
+    #     df_opt_margins = asyncio.run(get_margins(port=PORT, 
+    #                                              contracts=df_all_qualified_options,))
+    # else: # no need for lots_path
+    #     df_opt_margins = asyncio.run(get_margins(port=PORT, 
+    #                                              contracts=df_all_qualified_options,))
+    
+    df_opt_margins = asyncio.run(get_margins(port=PORT, 
                                                  contracts=df_all_qualified_options,))
-    else: # no need for lots_path
-        df_opt_margins = asyncio.run(get_margins(port=PORT, 
-                                                 contracts=df_all_qualified_options,))
+
     pickle_with_age_check(df_opt_margins, opt_margins_path, 0)
 
     # Get all the options
@@ -2374,11 +2391,13 @@ def get_nse_payload(url: str) -> requests.models.Response:
     Returns response
 
     url: (samples)
-    * https://archives.nseindia.com/content/fo/fo_mktlots.csv for lots
     * https://nsearchives.nseindia.com/content/nsccl/C_CATG.T01 for margin groups
     * https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O for fno equity list
     * https://www.nseindia.com/api/option-chain-equities?symbol=RELIANCE for equity options
     * https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY for index options
+
+    
+    * https://archives.nseindia.com/content/fo/fo_mktlots.csv for lots <b> Does not work after 15-April-2024 </b>
 
     Response processing examples:
     ---
@@ -2409,48 +2428,6 @@ def nse_ban_list() -> list:
     return ban_list
 
 
-def get_lots_from_nse(save: bool=True) -> dict:
-    """
-    Gets lots from nse site without any symbol cleansing
-    """
-
-    MKT_LOTS_URL = 'https://archives.nseindia.com/content/fo/fo_mktlots.csv'
-
-    MARKET = 'NSE'
-    DATAPATH = ROOT / 'data' / MARKET.lower()
-
-    lots_path = DATAPATH / 'lots.pkl'
-
-    response = get_nse_payload(MKT_LOTS_URL).text
-
-    res_dict = {} # unclean symbol results dictionary
-
-    try:
-        for line in response.split('\n'):
-            if line != '' and re.search(',', line) and (line.casefold().find('symbol') == -1):
-                (code, name) = [x.strip() for x in line.split(',')[1:3]]
-                res_dict[code] = int(name)
-    except ValueError:
-        logger.error("Fresh lots not available in 'https://archives.nseindia.com/content/fo/fo_mktlots.csv'")
-        res_dict = get_pickle(lots_path, print_msg=True)
-        save = False
-
-    if save:
-        pickle_me(res_dict, lots_path)
-    
-    return res_dict
-
-
-def get_nse_native_fno_list() -> list:
-    """Gets a dictionary of native nse symbols from nse.com"""
-
-    res_dict = get_lots_from_nse()
-
-    nselist = [k for k, _ in res_dict.items()]
-
-    return nselist
-
-
 def nse2ib(nselist: list, as_dict: bool = False) -> Union[list, dict]:
     """Convert NSE symbols to IB friendly ones"""
 
@@ -2471,51 +2448,57 @@ def nse2ib(nselist: list, as_dict: bool = False) -> Union[list, dict]:
     return ib_fnos
 
 
-def make_nse_lots() -> dict:
+def get_zerodha_span_payload(data: dict):
 
-    """Makes lots for NSE on cleansed IB symbols without BLACKLIST"""
+    zero_headers = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                    'AppleWebKit/537.36 '
+                                    '(KHTML, like Gecko) '
+                                    'Chrome/80.0.3987.149 Safari/537.36',
+                    'referer': 'https://zerodha.com/',
+                    'origin': 'https://zerodha.com/',
+                    'content-type': 'application/json',
+                    }
+    
+    base_url = "https://zerodha.com/"
+    url = "https://zerodha.com/margin-calculator/SPAN"
 
-    MARKET = 'NSE'
-    DATAPATH = ROOT / 'data' / MARKET.lower()
 
-    lots_path = DATAPATH / 'lots.pkl'
+    with requests.Session() as session:
+        request = session.get(base_url, headers=zero_headers, timeout=5)
+        cookies = dict(request.cookies)
+        response = session.post(url, headers=zero_headers, data=data, timeout=5, cookies=cookies)
 
-    res_dict = get_lots_from_nse()
+    return response
 
-    nselist = list(res_dict.keys())
 
-    path_to_yaml_file = ROOT / 'data' / 'master' / 'nse2ibkr.yml'
+def zerodha_lots_expiries() -> pd.DataFrame:
 
-    # get substitutions from YAML file
-    with open(path_to_yaml_file, 'r') as f:
-        subs = yaml.load(f, Loader=yaml.FullLoader)
+    """Gets the lots and expiries for Zerodha"""
+    
+    response = get_zerodha_span_payload({}) # Empty data dictionary
+    r = response.text
+    soup = BeautifulSoup(r, features="lxml")
 
-    list_without_percent_sign = list(map(subs.get, nselist, nselist))
+    # get all the scripts
+    js_code = soup.findAll("script")
 
-    # fix length to 9 characters
-    nse_symbols = [s[:9] for s in list_without_percent_sign]
+    # get the script with FUTURES variable
+    the_script = [j for j in js_code if 'var FUTURES' in str(j)]
 
-    # make a dictionary to map nse symbols to ib friendly symbols
-    nse2ibsymdict = dict(zip(nselist, nse_symbols))
+    lots_n_expiries = eval(re.findall(r'\[(.*?)\]\]', str(the_script))[0]+']')
+    lot_exp_list = list([L0, L1.split()[0], L1.split()[1], L2] for L0, L1, L2 in lots_n_expiries)
 
-    # correct the nse symbols
-    result = {nse2ibsymdict[k]: v for k, v in res_dict.items()}
+    df = pd.DataFrame(lot_exp_list, columns=['zeroscrip', 'symbol', 'zexpiry', 'lot'])
 
-    # remove BLACKLIST
-    BLACKLIST = Vars(MARKET).BLACKLIST
-
-    clean_lots = {k: v for k, v 
-                    in result.items() 
-                    if k not in BLACKLIST} 
-
-    return clean_lots
+    return df
 
 
 def fnolist():
 
     """Generates a list of fnos"""
     
-    fnos = list(make_nse_lots().keys())
+    df = zerodha_lots_expiries()
+    fnos = sorted(list(set(df.symbol)))
 
     return fnos
 
@@ -2707,7 +2690,6 @@ def nse_web_json_to_df(symbol: str) -> pd.DataFrame:
     df_opts = pd.DataFrame.from_dict(options, orient='index')
 
     return df_opts
-
 
 
 def clean_nse_web_options(df_opts: pd.DataFrame) -> pd.DataFrame:

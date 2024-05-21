@@ -83,8 +83,8 @@ SNP:
   EXCHANGE: 'SMART'
   CURRENCY: 'USD'
   PORT: 1300
-  CID: 2
   PAPER: 1301 # For paper trades in IBG
+  CID: 2
 
   MINDTE: 1
   MAXDTE: 60

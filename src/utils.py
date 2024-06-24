@@ -16,17 +16,14 @@ from typing import Iterable, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
-# import pandas_market_calendars as mcal
-# import pendulum
 import pytz
 import requests
 import yaml
 from bs4 import BeautifulSoup
 from from_root import from_root
-from ib_insync import (IB, Contract, Index, LimitOrder, MarketOrder, Option,
+from ib_async import (IB, Contract, Index, LimitOrder, MarketOrder, Option,
                        Stock, util)
 from loguru import logger
-# from pendulum.date import Date
 from pytz import timezone
 from scipy.integrate import quad
 from tqdm.asyncio import tqdm, tqdm_asyncio
@@ -426,6 +423,19 @@ def get_file_age(file_path: Path) -> Timediff:
     return file_age
 
 
+def is_file_age_older_than(filepath: Path, age_in_days: float=1):
+
+    existing_file_age = get_file_age(filepath)
+
+    seconds_in_a_day = 24*60*60
+    if existing_file_age:
+        file_age_in_days = existing_file_age.td.total_seconds() / seconds_in_a_day
+    else:
+        file_age_in_days = 0
+
+    return True if file_age_in_days > age_in_days else False
+
+
 def get_dte(dt: Union[datetime.datetime, datetime.date, str], 
             exchange: str, # 'NSE' or 'SNP'
             time_stamp: bool=False) -> float:
@@ -645,7 +655,7 @@ def get_lots(contract):
     Retrieves lots based on contract.
 
     Args:
-        contract: ib_insync contract. could be Contract, Option, Stock or Index type.
+        contract: ib_async contract. could be Contract, Option, Stock or Index type.
         lots_path: A dictionary from `lots.pkl` for retrieving values associated with symbols (if required).
 
     Returns:
@@ -684,7 +694,7 @@ def get_lots(contract):
 
 def clean_ib_util_df(contracts: Union[list, pd.Series]) -> pd.DataFrame:
 
-    """Cleans ib_insync's util.df to keep only relevant columns"""
+    """Cleans ib_async's util.df to keep only relevant columns"""
 
     df1 = pd.DataFrame([]) # initialize 
 
@@ -1571,7 +1581,8 @@ def compute_strike_sd_right(df: pd.DataFrame) -> pd.DataFrame:
     df = df.assign(strike_sdev = (df.strike - df.undPrice) / df.sigma)
 
     # determine the right
-    df = df.assign(right = df.strike_sdev.apply(lambda strike_sdev: 'P' if strike_sdev < 0 else 'C'))
+    # df = df.assign(right = df.strike_sdev.apply(lambda strike_sdev: 'P' if strike_sdev < 0 else 'C')) # !! should be done outside function
+    df = pd.concat((df.assign(right = "P"), df.assign(right = "C")), axis=0, ignore_index=True)
 
     return df
 
@@ -1692,8 +1703,10 @@ async def make_chains(contracts: list,
     if not MARKET:
         MARKET = get_market_name(util.df(to_list(contracts)))
 
-    _vars = Vars(MARKET)
-    PORT = port = _vars.PORT
+    if not port:
+        _vars = Vars(MARKET)
+        port = _vars.PORT
+    PORT = port
 
     with await IB().connectAsync(port=port, clientId=CID) as ib:
 
@@ -2340,38 +2353,6 @@ def opt_margins_with_lot_check(df: pd.DataFrame,
     df_margins.drop(columns=['contract', 'secType', 'conId', 'multiplier', 'lot'], inplace=True)
 
     return df_margins
-
-
-def snp_margin_compute(df: pd.DataFrame) -> pd.DataFrame:
-
-    """Generates computed margins for symbol df with undPrice, lot and multiplier"""
-
-    # Establish the range
-    range1 = [0, 2.5]
-    range2 = [2.5, 5]
-    range3 = [5, 16.67]
-    range4 = [16.67, np.inf]
-
-    # Set up the masks
-    m1 = df.undPrice.between(*range1, inclusive='left')
-    m2 = df.undPrice.between(*range2, inclusive='left')
-    m3 = df.undPrice.between(*range3, inclusive='left')
-    m4 = df.undPrice.between(*range4, inclusive='left')
-
-    # compute the values
-    value1 = df[m1].undPrice*df[m1].lot*df[m1].multiplier*0.3
-    value2 = df[m2].lot*df[m2].multiplier*5
-    value3 = df[m3].undPrice*df[m3].lot*df[m3].multiplier
-    value4 = df[m4].lot*df[m4].multiplier*2.5
-    dfs = []
-
-    for i in range(4):
-        mask = 'm'+str(i+1)
-        val = 'value'+str(i+1)
-        dfs.append(df[eval(mask)].assign(mgnCompute=eval(val)))
-    df_out = pd.concat(dfs).reset_index(drop=True)
-
-    return df_out
 
 
 # * NSE SPECIFIC FUNCTIONS

@@ -1,5 +1,16 @@
 # Program left at:
-- Using [vulture](https://github.com/jendrikseipp/vulture/) to remove dead code
+
+- [one symbol experiment](tests\one_symbol.ipynb) 
+    - use make_lots function from nse.py and convert symbols to ib.
+    - get margin
+    - make computed_margin and compare against margin
+    - ...computed margin formula: `(df_mgn.undPrice*df_mgn.iv*df_mgn.dte.apply(lambda x: math.sqrt(x/365))*5.3*df_mgn.multiplier*df_mgn.lot)[:1]`
+    - ... assumes SD of 5.3 !!
+
+- In a separate restructure nse.py to get fno_list, lots, price, history - of both equity and index from nseindia related website.
+
+- Use [vulture](https://github.com/jendrikseipp/vulture/) to remove dead code
+
 - Build a separate `base.py` - separated from `utils.py` which will:
    - have an `options.pkl` with lots and computed_margins based on strike closest to market price from IB
       - for nse it will also have option price, rom and pop

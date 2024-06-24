@@ -5,7 +5,7 @@ import pandas as pd
 import pickle
 from typing import Optional
 import datetime
-from ib_insync import Order
+from ib_async import Order
 
 def empty_the_df(df):
     """Empty the dataclass df"""

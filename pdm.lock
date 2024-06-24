@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["cross_platform"]
 lock_version = "4.4.1"
-content_hash = "sha256:2bfba9f0e6bbb4a6e3037c5ce84566a31e63ba0dd24aa257271ba97bab80d257"
+content_hash = "sha256:7d3e4b6d684dd94ef6fb548880f7e17b215b790f68fc6ee02b1b67715836171e"
 
 [[package]]
 name = "aiohttp"
@@ -420,14 +420,14 @@ files = [
 
 [[package]]
 name = "eventkit"
-version = "1.0.1"
+version = "1.0.3"
 summary = "Event-driven data pipelines"
 dependencies = [
     "numpy",
 ]
 files = [
-    {file = "eventkit-1.0.1-py3-none-any.whl", hash = "sha256:6060a6aa04d5c5d20f2e55b7c17e2a22e8d31f88f2c2791d60eab3301aa040da"},
-    {file = "eventkit-1.0.1.tar.gz", hash = "sha256:56b99a6205f61cd995aa5e0036e37bd61f052f7d32560e60b6fe45e319a7ef3a"},
+    {file = "eventkit-1.0.3-py3-none-any.whl", hash = "sha256:0e199527a89aff9d195b9671ad45d2cc9f79ecda0900de8ecfb4c864d67ad6a2"},
+    {file = "eventkit-1.0.3.tar.gz", hash = "sha256:99497f6f3c638a50ff7616f2f8cd887b18bbff3765dc1bd8681554db1467c933"},
 ]
 
 [[package]]
@@ -641,17 +641,17 @@ files = [
 ]
 
 [[package]]
-name = "ib-insync"
-version = "0.9.86"
-requires_python = ">=3.6"
+name = "ib-async"
+version = "1.0.1"
+requires_python = ">=3.10"
 summary = "Python sync/async framework for Interactive Brokers API"
 dependencies = [
     "eventkit",
     "nest-asyncio",
 ]
 files = [
-    {file = "ib_insync-0.9.86-py3-none-any.whl", hash = "sha256:a61fbe56ff405d93d211dad8238d7300de76dd6399eafc04c320470edec9a4a4"},
-    {file = "ib_insync-0.9.86.tar.gz", hash = "sha256:73af602ca2463f260999970c5bd937b1c4325e383686eff301743a4de08d381e"},
+    {file = "ib_async-1.0.1-py3-none-any.whl", hash = "sha256:7a726c5d4684e04a4ce82718473ac1d478c551bca4c8470f88b852dbb68bf8bd"},
+    {file = "ib_async-1.0.1.tar.gz", hash = "sha256:eeabe36ca877c7c90b5ab488b78825b2e686a73abed7b23e60ef2f52e486f4ec"},
 ]
 
 [[package]]
@@ -1709,6 +1709,20 @@ files = [
 ]
 
 [[package]]
+name = "plotly"
+version = "5.22.0"
+requires_python = ">=3.8"
+summary = "An open-source, interactive data visualization library for Python"
+dependencies = [
+    "packaging",
+    "tenacity>=6.2.0",
+]
+files = [
+    {file = "plotly-5.22.0-py3-none-any.whl", hash = "sha256:68fc1901f098daeb233cc3dd44ec9dc31fb3ca4f4e53189344199c43496ed006"},
+    {file = "plotly-5.22.0.tar.gz", hash = "sha256:859fdadbd86b5770ae2466e542b761b247d1c6b49daed765b95bb8c7063e7469"},
+]
+
+[[package]]
 name = "prometheus-client"
 version = "0.17.1"
 requires_python = ">=3.6"
@@ -2235,6 +2249,16 @@ dependencies = [
 files = [
     {file = "stack_data-0.6.3-py3-none-any.whl", hash = "sha256:d5558e0c25a4cb0853cddad3d77da9891a08cb85dd9f9f91b9f8cd66e511e695"},
     {file = "stack_data-0.6.3.tar.gz", hash = "sha256:836a778de4fec4dcd1dcd89ed8abff8a221f58308462e1c4aa2a3cf30148f0b9"},
+]
+
+[[package]]
+name = "tenacity"
+version = "8.4.1"
+requires_python = ">=3.8"
+summary = "Retry code until it succeeds"
+files = [
+    {file = "tenacity-8.4.1-py3-none-any.whl", hash = "sha256:28522e692eda3e1b8f5e99c51464efcc0b9fc86933da92415168bc1c4e2308fa"},
+    {file = "tenacity-8.4.1.tar.gz", hash = "sha256:54b1412b878ddf7e1f1577cd49527bad8cdef32421bd599beac0c6c3f10582fd"},
 ]
 
 [[package]]
